@@ -1,0 +1,22 @@
+{
+  "_comment": "Copy to /etc/private-dns/config.json and edit. Never commit a real config.",
+
+  "base_domain": "dns.example.com",
+
+  "cert_file": "/etc/private-dns/certs/fullchain.pem",
+  "key_file": "/etc/private-dns/certs/privkey.pem",
+
+  "listen_dot": ":853",
+  "listen_doh": ":443",
+  "listen_plain": ":53",
+  "listen_admin": "127.0.0.1:8053",
+
+  "upstreams": ["127.0.0.1:5335"],
+
+  "db_path": "/var/lib/private-dns/policy.db",
+  "blocklist_dir": "/var/lib/private-dns/blocklists",
+
+  "admin_tokens": ["GENERATE_WITH_openssl_rand_hex_32"],
+
+  "open_plain": false
+}

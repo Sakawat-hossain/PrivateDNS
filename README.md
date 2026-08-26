@@ -1,0 +1,248 @@
+# PrivateDNS
+
+A self-hostable, multi-tenant filtering DNS platform. Each customer gets their
+own hostname, and the tenant identity travels in the TLS handshake — so the
+resolver knows whose policy to apply before a single query is answered.
+
+```
+customer sets Private DNS to:  k7mp2qx9rt.dns.example.com
+                               └────┬────┘ └──────┬─────┘
+                                 routeID      base domain
+```
+
+Built as a single static Go binary with an embedded SQLite policy store. No
+Redis, no cgo, no runtime dependencies.
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
+> **Status: early development.** The resolver is working and tested. The
+> backend API, admin dashboard and installer are not built yet — see
+> [Roadmap](#roadmap). Do not run this in production.
+
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Client
+        P[Phone / Router]
+    end
+
+    subgraph PrivateDNS
+        L[DoT :853<br/>DoH :443<br/>DNS :53]
+        ID{Identify<br/>tenant}
+        POL[Policy engine]
+        C[(Cache)]
+        DB[(SQLite<br/>policy store)]
+    end
+
+    U[Upstream resolver<br/>Unbound]
+
+    P -->|SNI carries routeID| L
+    L --> ID
+    ID -->|per query| DB
+    ID --> POL
+    POL -->|allowlisted| C
+    POL -->|blocked| X[NXDOMAIN]
+    POL -->|overridden| O[Our address]
+    C -->|miss| U
+```
+
+Every query runs the same pipeline, in this order:
+
+1. **Allowlist** — the tenant's rules, then global. Beats everything below.
+2. **Override** — answer with an address we control instead of the real one.
+3. **Blocklist** — `NXDOMAIN`, unless the tenant has paused filtering.
+4. **Cache**, then **upstream**.
+
+Unrecognised, expired and suspended tenants receive `REFUSED`. The resolver is
+never open to the public, which is what keeps it off amplification-abuse lists.
+
+## Features
+
+| Capability | Status |
+|---|---|
+| DNS-over-TLS with SNI tenant identification | working |
+| DNS-over-HTTPS (RFC 8484) | working |
+| Plain DNS with source-IP identification | working |
+| Blocklist filtering, hot-reloaded | working |
+| Answer overrides, wildcard-matching | working |
+| Per-tenant allowlist | working |
+| Subscription expiry and revocation | working |
+| Pause filtering (false-positive escape hatch) | working |
+| Provisioning REST API | working |
+| Prometheus metrics | working |
+| Backend API and admin dashboard | planned |
+| Customer portal | planned |
+| Installer, Docker, packages | planned |
+
+## Quick start
+
+Requires Go 1.24+. Nothing else — the SQLite driver is pure Go.
+
+```bash
+git clone https://github.com/Sakawat-hossain/PrivateDNS.git
+cd PrivateDNS
+make build
+```
+
+Create a configuration:
+
+```bash
+cp configs/config.example.json config.json
+```
+
+Edit `config.json` — at minimum set `base_domain`, `upstreams`, the certificate
+paths, and generate an admin token with `openssl rand -hex 32`.
+
+```bash
+./privatedns-resolver -config config.json
+```
+
+## DNS records
+
+Two records, both pointing at your server:
+
+| Type | Name | Value |
+|---|---|---|
+| A | `dns` | your server's IP |
+| A | `*.dns` | your server's IP |
+
+> **If your DNS is on Cloudflare, both records must be grey-cloud / DNS-only.**
+> The orange-cloud proxy carries HTTP only. It cannot pass port 53 or 853, and
+> enabling it breaks the service in a way that looks exactly like a firewall
+> problem.
+
+## Certificates
+
+Per-tenant hostnames need a **wildcard** certificate, and a wildcard can only be
+issued over the ACME **DNS-01** challenge — HTTP-01 cannot produce one.
+
+`deploy/scripts/issue-cert.sh` handles issuance and renewal through `lego`. It
+reads the DNS provider credential from a root-only file you create on the
+server:
+
+```bash
+sudo sh -c 'printf "CF_DNS_API_TOKEN=your_token\n" > /etc/private-dns/cloudflare.env'
+sudo chmod 600 /etc/private-dns/cloudflare.env
+sudo ACME_EMAIL=you@example.com BASE_DOMAIN=dns.example.com \
+     deploy/scripts/issue-cert.sh run
+```
+
+**No credential ever belongs in this repository.** The token needs exactly one
+permission: DNS edit, scoped to your zone.
+
+The resolver re-reads its certificate from disk within a minute of it changing,
+so renewals need no restart and drop no connections.
+
+## Creating a tenant
+
+```bash
+curl -sX POST http://127.0.0.1:8053/v1/tenants \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"first customer","days":30}'
+```
+
+```json
+{
+  "route_id": "k7mp2qx9rt",
+  "hostname": "k7mp2qx9rt.dns.example.com",
+  "expires_at": 1793404800
+}
+```
+
+## Client setup
+
+**Android** — Settings → Network & internet → Private DNS → *Private DNS
+provider hostname* → enter the tenant hostname.
+
+**Verify from any machine:**
+
+```bash
+kdig @dns.example.com +tls-hostname=k7mp2qx9rt.dns.example.com +tls example.com
+```
+
+**iOS** requires a configuration profile; the generator is on the roadmap.
+
+## API
+
+Every route except `/metrics` and `/healthz` requires
+`Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/v1/tenants` | Create. `label` plus one of `days`, `minutes`, `expires_at`. |
+| GET | `/v1/tenants/{id}` | Current state. |
+| POST | `/v1/tenants/{id}/extend` | Renew; reactivates a suspended tenant. |
+| POST | `/v1/tenants/{id}/revoke` | Suspend. Effective within one second. |
+| POST | `/v1/tenants/{id}/pause` | Stop filtering temporarily. |
+| POST | `/v1/ips` | Bind a source IP to a tenant. |
+| DELETE | `/v1/ips/{ip}` | Unbind. |
+| POST | `/v1/overrides` | `domain`, `answer`, optional `route_id`. |
+| POST | `/v1/allow` | `domain`, optional `route_id`. |
+| GET | `/metrics` | Prometheus text format. |
+
+## Security
+
+The admin API binds to `127.0.0.1` by default. **Never expose it to the
+internet.** Put it behind an authenticated reverse proxy or a private network if
+remote access is genuinely needed.
+
+Other deployment rules that matter:
+
+- Keep `open_plain` set to `false`. An open resolver is an amplification vector.
+- Never place DNS or DoT behind an HTTP reverse proxy. Only the web interface
+  belongs behind Nginx.
+- Run as a dedicated unprivileged user. The supplied systemd unit grants
+  `CAP_NET_BIND_SERVICE` rather than running as root.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a
+public issue for security problems.
+
+## Design notes
+
+Two decisions worth knowing about, because both look like bugs until explained.
+
+**Revocation latency is bounded at one second.** The policy snapshot rebuilds
+from SQLite every second, and the tenant is looked up *per query* rather than
+per connection. A lapsed subscription therefore stops resolving even on a DoT
+connection a phone has held open for hours.
+
+**An IPv4 override deliberately answers `AAAA` with an empty `NOERROR`**, and
+suppresses `HTTPS`/`SVCB` records for overridden names. Returning the real IPv6
+address would let a dual-stack client prefer IPv6 and bypass the override
+entirely; `HTTPS` records carry their own address hints and would do the same.
+
+## Development
+
+```bash
+make check    # gofmt, go vet, and the full test suite
+make test     # tests only
+make release  # cross-compile linux/amd64 and linux/arm64
+make help     # all targets
+```
+
+The integration tests stand up a real TLS listener with a self-signed wildcard
+certificate and perform genuine DoT exchanges, asserting on filtering,
+overrides, refusal of unknown tenants, and revocation.
+
+## Roadmap
+
+| Stage | Scope |
+|---|---|
+| 1 | Resolver hardening — rate limiting, fuzzing, ECS stripping, real health checks |
+| 2 | Backend API — authentication, RBAC, audit log |
+| 3 | Admin dashboard |
+| 4 | Customer portal — IP registration, iOS profiles, diagnostics |
+| 5 | Deployment — Docker, Debian packages, installer |
+| 6 | CI/CD, signed releases, security review |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). For anything larger than a bug fix,
+please open an issue first.
+
+## License
+
+[AGPL-3.0](LICENSE). If you run a modified version as a network service, you
+must make your changes available to its users.
