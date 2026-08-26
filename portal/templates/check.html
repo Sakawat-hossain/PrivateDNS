@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="{{.Lang}}" dir="{{.Lang.Dir}}">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main class="narrow">
+  <h1>{{t .Lang "check.title"}}</h1>
+
+  <section class="card">
+    <div class="row">
+      <span class="label">{{t .Lang "ip.current"}}</span>
+      <code>{{.ClientIP}}</code>
+    </div>
+    {{if .Hostname}}
+    <div class="row">
+      <span class="label">{{t .Lang "status.hostname"}}</span>
+      <code>{{.Hostname}}</code>
+    </div>
+    {{end}}
+
+    <button type="button" id="run-check" class="primary big"
+            data-checking="{{t .Lang "check.checking"}}">{{t .Lang "check.run"}}</button>
+
+    <div id="check-result" hidden></div>
+    <div id="check-fixes" hidden>
+      <h3>{{t .Lang "check.fixtitle"}}</h3>
+      <ol id="fix-list"></ol>
+    </div>
+  </section>
+</main>
+{{template "foot" .}}
+</body>
+</html>

@@ -1,0 +1,38 @@
+{{define "head"}}<!-- shared head fragment -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1218">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<title>{{.Brand}}</title>
+{{end}}
+
+{{define "nav"}}
+<header class="nav">
+  <a class="brand" href="/">{{.Brand}}</a>
+  <nav>
+    {{if .SignedIn}}
+      <a href="/">{{t .Lang "nav.status"}}</a>
+      <a href="/setup">{{t .Lang "nav.setup"}}</a>
+    {{end}}
+    <a href="/check">{{t .Lang "nav.check"}}</a>
+    <a class="lang" href="/lang/{{.Lang.Other}}">{{.Lang.OtherName}}</a>
+    {{if .SignedIn}}
+      <form method="post" action="/logout" class="inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+        <button type="submit" class="linkish">{{t .Lang "nav.signout"}}</button>
+      </form>
+    {{end}}
+  </nav>
+</header>
+{{end}}
+
+{{define "flash"}}
+{{if .Flash}}<div class="flash {{.FlashKind}}" role="status">{{.Flash}}</div>{{end}}
+{{end}}
+
+{{define "foot"}}
+<footer><span>{{.Brand}}</span><span class="muted">{{.Version}}</span></footer>
+<script src="/static/app.js"></script>
+{{end}}

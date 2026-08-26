@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="{{.Lang}}" dir="{{.Lang.Dir}}">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main class="narrow">
+  <h1>{{t .Lang "login.title"}}</h1>
+  {{template "flash" .}}
+  <form method="post" action="/login" class="card">
+    <label for="email">{{t .Lang "login.email"}}</label>
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+
+    <label for="password">{{t .Lang "login.password"}}</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+    <button type="submit" class="primary">{{t .Lang "login.submit"}}</button>
+  </form>
+</main>
+{{template "foot" .}}
+</body>
+</html>

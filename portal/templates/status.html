@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="{{.Lang}}" dir="{{.Lang.Dir}}">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+
+  {{if .Expiring}}<div class="flash warn">{{t .Lang "status.expiringsoon"}}</div>{{end}}
+
+  <section class="card">
+    <h1>{{t .Lang "status.title"}}</h1>
+
+    <div class="row">
+      <span class="pill {{if .Active}}ok{{else}}bad{{end}}">
+        {{if .Active}}{{t .Lang "status.active"}}{{else}}{{t .Lang "status.suspended"}}{{end}}
+      </span>
+      {{if .Paused}}<span class="pill warn">{{t .Lang "status.paused"}}</span>{{end}}
+    </div>
+
+    {{if .Hostname}}
+    <label class="label">{{t .Lang "status.hostname"}}</label>
+    <div class="copyrow">
+      <code id="hostname">{{.Hostname}}</code>
+      <button type="button" class="copy" data-copy="hostname"
+              data-copied="{{t .Lang "status.copied"}}">{{t .Lang "status.copy"}}</button>
+    </div>
+    {{end}}
+
+    <dl class="stats">
+      <div><dt>{{t .Lang "status.expires"}}</dt><dd>{{.ExpiresIn}}</dd></div>
+      <div><dt>{{t .Lang "status.queries"}}</dt><dd>{{.Queries}}</dd></div>
+      <div><dt>{{t .Lang "status.blocked"}}</dt><dd>{{.Blocked}}</dd></div>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>{{t .Lang "ip.title"}}</h2>
+    <p class="muted">{{t .Lang "ip.explain"}}</p>
+    <div class="row">
+      <span class="label">{{t .Lang "ip.current"}}</span>
+      <code>{{.ClientIP}}</code>
+    </div>
+    <form method="post" action="/ip">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="route_id" value="{{.RouteID}}">
+      <button type="submit" class="primary big">{{t .Lang "ip.update"}}</button>
+    </form>
+    <p class="hint">{{t .Lang "ip.help"}}</p>
+  </section>
+
+  <section class="card">
+    <h2>{{t .Lang "pause.title"}}</h2>
+    <p class="muted">{{t .Lang "pause.help"}}</p>
+    <form method="post" action="/pause">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <input type="hidden" name="route_id" value="{{.RouteID}}">
+      <button type="submit">{{t .Lang "pause.button"}}</button>
+    </form>
+  </section>
+
+  {{if .Support}}
+  <section class="card">
+    <h2>{{t .Lang "renew.title"}}</h2>
+    <p class="muted">{{t .Lang "renew.help"}}</p>
+    <a class="button" href="{{.Support}}" rel="noopener noreferrer" target="_blank">{{t .Lang "renew.title"}}</a>
+  </section>
+  {{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>

@@ -1,0 +1,174 @@
+/* Dark by default. The portal is opened on a phone, often at night, often on a
+   metered connection — so this is one small stylesheet with no webfont. */
+:root {
+  --bg: #0e1218;
+  --surface: #161b23;
+  --line: #262d38;
+  --ink: #e5e9f0;
+  --muted: #8a94a4;
+  --accent: #4f8cff;
+  --ok: #4fbf95;
+  --warn: #e0a272;
+  --bad: #ff7a7a;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --line: #dce1e9;
+    --ink: #161a22;
+    --muted: #626d7e;
+    --accent: #2f5fe0;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  /* Noto Sans Bengali is named explicitly: without it, Bengali text falls back
+     to whatever the device has and often renders with broken conjuncts. */
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Bengali", sans-serif;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.brand { font-weight: 700; color: var(--ink); text-decoration: none; }
+.nav nav { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
+.nav a:hover, .nav a:focus-visible { color: var(--ink); }
+.nav .lang { color: var(--accent); }
+
+main { max-width: 640px; margin: 0 auto; padding: 20px 18px 48px; }
+main.narrow { max-width: 420px; }
+
+h1 { font-size: 22px; margin: 0 0 16px; }
+h2 { font-size: 17px; margin: 0 0 8px; }
+h3 { font-size: 15px; margin: 16px 0 6px; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.muted { color: var(--muted); font-size: 14px; }
+.hint { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+
+code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 9px;
+  word-break: break-all;
+  display: inline-block;
+}
+
+.copyrow { display: flex; gap: 8px; align-items: stretch; margin: 6px 0 4px; }
+.copyrow code { flex: 1; }
+
+button, .button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 10px 14px;
+  text-decoration: none;
+  display: inline-block;
+  text-align: center;
+}
+button:hover, .button:hover { border-color: var(--muted); }
+button:focus-visible, .button:focus-visible, a:focus-visible, input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+/* The IP button is the most-tapped control in the product, usually one-handed
+   on a phone, so it gets a full-width target. */
+.big { width: 100%; padding: 15px; font-size: 17px; margin-top: 6px; }
+
+.linkish { background: none; border: none; color: var(--muted); padding: 0; font-size: 14px; }
+.inline { display: inline; }
+
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 5px; }
+input {
+  width: 100%;
+  font: inherit;
+  padding: 11px 12px;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+form.card button { width: 100%; margin-top: 18px; }
+
+.pill {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+
+.flash {
+  padding: 11px 14px;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+.flash.ok { border-color: var(--ok); color: var(--ok); }
+.flash.error { border-color: var(--bad); color: var(--bad); }
+.flash.warn { border-color: var(--warn); color: var(--warn); }
+
+.stats { display: flex; flex-wrap: wrap; gap: 18px; margin: 16px 0 0; }
+.stats div { margin: 0; }
+.stats dt { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.stats dd { margin: 3px 0 0; font-size: 18px; font-variant-numeric: tabular-nums; }
+
+.tenants { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.tenants li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+ol { padding-left: 20px; }
+ol li { margin: 6px 0; color: var(--muted); font-size: 14px; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
