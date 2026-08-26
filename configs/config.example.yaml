@@ -1,0 +1,111 @@
+# PrivateDNS resolver configuration.
+#
+# Copy to /etc/private-dns/config.yaml and edit. Never commit a real config:
+# it carries admin tokens.
+#
+# Every key below can also be set from the environment as PRIVATEDNS_<KEY>,
+# and the environment wins over this file. That is how one container image
+# serves several deployments without being rebuilt:
+#
+#   PRIVATEDNS_BASE_DOMAIN=dns.example.com
+#   PRIVATEDNS_UPSTREAMS=10.0.0.2:53,10.0.0.3:53
+#   PRIVATEDNS_ADMIN_TOKENS=...        # comma-separated
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+# The suffix tenant hostnames hang off. A customer connecting to
+# "k7mp2qx9rt.dns.example.com" is identified as tenant "k7mp2qx9rt".
+base_domain: dns.example.com
+
+# ---------------------------------------------------------------------------
+# TLS
+# ---------------------------------------------------------------------------
+#
+# Must be a WILDCARD certificate covering *.<base_domain>, because every tenant
+# connects to its own hostname. A wildcard can only be issued over the ACME
+# DNS-01 challenge — HTTP-01 cannot produce one. See deploy/scripts/issue-cert.sh.
+#
+# The resolver re-reads these from disk within a minute of them changing, so a
+# renewal needs no restart and drops no connections.
+
+cert_file: /etc/private-dns/certs/fullchain.pem
+key_file: /etc/private-dns/certs/privkey.pem
+
+# ---------------------------------------------------------------------------
+# Listeners — set any to "" to disable
+# ---------------------------------------------------------------------------
+
+listen_dot: ":853"    # DNS-over-TLS.   Tenant from the TLS SNI.
+listen_doh: ":443"    # DNS-over-HTTPS. Tenant from the TLS SNI.
+listen_plain: ":53"   # Plain DNS.      Tenant from the source IP.
+
+# Provisioning API and metrics.
+#
+# NEVER expose this to the internet. It performs privileged operations behind a
+# bearer token; loopback is the intended binding. The resolver logs a warning
+# at startup if this is not a loopback address.
+listen_admin: 127.0.0.1:8053
+
+# ---------------------------------------------------------------------------
+# Resolution
+# ---------------------------------------------------------------------------
+
+# Recursive resolvers to forward to. Run your own (Unbound on 127.0.0.1:5335)
+# in production: a public resolver here sees every query your customers make,
+# which contradicts the product.
+upstreams:
+  - 127.0.0.1:5335
+
+# Remove EDNS Client Subnet from forwarded queries. ECS tells the upstream
+# which subnet the customer is on — a per-lookup location signal handed to a
+# third party. Leave this on.
+strip_ecs: true
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+db_path: /var/lib/private-dns/policy.db
+blocklist_dir: /var/lib/private-dns/blocklists
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
+
+# Bearer tokens for the admin API. Generate with: openssl rand -hex 32
+# Set from the environment in production rather than writing them here.
+admin_tokens:
+  - GENERATE_WITH_openssl_rand_hex_32
+
+# Allow unauthenticated queries on the plain :53 listener.
+#
+# Leave false. An open resolver is a DNS amplification vector and will get the
+# host onto abuse lists.
+open_plain: false
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+#
+# A tenant hostname is not a secret: it travels in the SNI in cleartext, and
+# customers share them. These limits stop one leaked hostname being used to
+# flood the resolver on that tenant's behalf.
+#
+# Browsing is bursty — a single page load fires many lookups at once — so the
+# burst allowance needs real headroom or normal use gets throttled.
+
+rate_limit_qps: 50       # sustained queries per second, per tenant. 0 disables.
+rate_limit_burst: 200    # how far above the sustained rate a tenant may spike
+max_conns_per_tenant: 64 # concurrent DoT connections. 0 is unlimited.
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+#
+# Query names are never logged. Aggregate per-tenant counters are kept instead;
+# at debug level only the parent domain of a failing lookup is recorded.
+
+log_level: info    # debug | info | warn | error
+log_format: text   # text for journalctl, json for a log shipper
