@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/netip"
@@ -11,41 +12,43 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schema = `
-CREATE TABLE IF NOT EXISTS tenants (
-  route_id     TEXT PRIMARY KEY,
-  label        TEXT NOT NULL DEFAULT '',
-  status       TEXT NOT NULL DEFAULT 'active',
-  expires_at   INTEGER NOT NULL,
-  block_ads    INTEGER NOT NULL DEFAULT 1,
-  paused_until INTEGER NOT NULL DEFAULT 0,
-  created_at   INTEGER NOT NULL
-);
+// Store is the policy interface the resolver depends on. SQLiteStore is the
+// only implementation today; the interface exists so a PostgreSQL backend can
+// be added later without touching the query path.
+type Store interface {
+	// Read path — called on every query, must be cheap and non-blocking.
+	Tenant(routeID string) *Tenant
+	TenantByIP(ip string) *Tenant
+	Allowed(routeID, name string) bool
+	Override(routeID, name string) (netip.Addr, bool)
+	TenantCount() int
 
--- Source-IP authorisation, used by the plain :53 listener and the proxy tier.
-CREATE TABLE IF NOT EXISTS tenant_ips (
-  ip       TEXT PRIMARY KEY,
-  route_id TEXT NOT NULL,
-  added_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_tenant_ips_route ON tenant_ips(route_id);
+	// Write path — provisioning, called by the admin API.
+	CreateTenant(routeID, label string, expiresAt int64) error
+	SetStatus(routeID, status string) error
+	Extend(routeID string, expiresAt int64) error
+	PauseFiltering(routeID string, until int64) error
+	RegisterIP(routeID, ip string) error
+	ReleaseIP(ip string) error
+	AddAllow(routeID, domain string) error
+	RemoveAllow(routeID, domain string) error
+	SetOverride(routeID, domain, answer string) error
+	RemoveOverride(routeID, domain string) error
 
--- Per-tenant allowlist. route_id '*' applies globally.
-CREATE TABLE IF NOT EXISTS allowlist (
-  route_id TEXT NOT NULL,
-  domain   TEXT NOT NULL,
-  PRIMARY KEY (route_id, domain)
-);
+	// Usage accounting — aggregates only, never per-query history.
+	RecordUsage(counts map[string]UsageDelta) error
+	Usage(routeID string) (Usage, bool)
 
--- Answer overrides: return our own address instead of the real one.
--- This is the smart-DNS mechanism. route_id '*' applies globally.
-CREATE TABLE IF NOT EXISTS overrides (
-  route_id TEXT NOT NULL,
-  domain   TEXT NOT NULL,
-  answer   TEXT NOT NULL,
-  PRIMARY KEY (route_id, domain)
-);
-`
+	// Lifecycle.
+	Reload() error
+	WatchReload(every time.Duration, onErr func(error))
+	Ping(ctx context.Context) error
+	SchemaVersion() (int, error)
+	Close() error
+}
+
+// compile-time assertion that the implementation satisfies the interface
+var _ Store = (*SQLiteStore)(nil)
 
 type Tenant struct {
 	RouteID     string
@@ -67,6 +70,24 @@ func (t *Tenant) Filtering(now int64) bool {
 	return t != nil && t.BlockAds && t.PausedUntil <= now
 }
 
+// Usage holds a tenant's cumulative counters.
+type Usage struct {
+	Queries    int64
+	Blocked    int64
+	Overridden int64
+	Throttled  int64
+	LastSeen   int64
+}
+
+// UsageDelta is an increment to apply to a tenant's counters.
+type UsageDelta struct {
+	Queries    int64
+	Blocked    int64
+	Overridden int64
+	Throttled  int64
+	LastSeen   int64
+}
+
 type snapshot struct {
 	tenants map[string]*Tenant
 	byIP    map[string]string
@@ -76,21 +97,27 @@ type snapshot struct {
 	over  map[string]map[string]netip.Addr
 }
 
-type Store struct {
+// SQLiteStore keeps policy in SQLite and serves reads from an in-memory
+// snapshot that is rebuilt on a timer. Queries never touch the database.
+type SQLiteStore struct {
 	db   *sql.DB
 	snap atomic.Pointer[snapshot]
 }
 
-func OpenStore(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+func OpenStore(path string) (*SQLiteStore, error) {
+	// WAL keeps the reload query from blocking provisioning writes.
+	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+
+	if _, err := migrate(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	s := &Store{db: db}
+
+	s := &SQLiteStore{db: db}
 	if err := s.Reload(); err != nil {
 		db.Close()
 		return nil, err
@@ -98,11 +125,15 @@ func OpenStore(path string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *SQLiteStore) Close() error { return s.db.Close() }
+
+func (s *SQLiteStore) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
+func (s *SQLiteStore) SchemaVersion() (int, error) { return currentSchemaVersion(s.db) }
 
 // Reload rebuilds the in-memory snapshot. Called on a one-second timer, which
 // is what bounds revocation latency.
-func (s *Store) Reload() error {
+func (s *SQLiteStore) Reload() error {
 	snap := &snapshot{
 		tenants: map[string]*Tenant{},
 		byIP:    map[string]string{},
@@ -125,6 +156,9 @@ func (s *Store) Reload() error {
 		snap.tenants[strings.ToLower(t.RouteID)] = &t
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	rows, err = s.db.Query(`SELECT ip,route_id FROM tenant_ips`)
 	if err != nil {
@@ -139,6 +173,9 @@ func (s *Store) Reload() error {
 		snap.byIP[ip] = strings.ToLower(rid)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	rows, err = s.db.Query(`SELECT route_id,domain FROM allowlist`)
 	if err != nil {
@@ -157,6 +194,9 @@ func (s *Store) Reload() error {
 		snap.allow[rid][normalizeDomain(dom)] = true
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	rows, err = s.db.Query(`SELECT route_id,domain,answer FROM overrides`)
 	if err != nil {
@@ -170,7 +210,7 @@ func (s *Store) Reload() error {
 		}
 		addr, err := netip.ParseAddr(ans)
 		if err != nil {
-			continue // skip malformed rows rather than failing the whole reload
+			continue // skip a malformed row rather than failing the whole reload
 		}
 		rid = strings.ToLower(rid)
 		if snap.over[rid] == nil {
@@ -179,12 +219,15 @@ func (s *Store) Reload() error {
 		snap.over[rid][normalizeDomain(dom)] = addr
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	s.snap.Store(snap)
 	return nil
 }
 
-func (s *Store) WatchReload(every time.Duration, onErr func(error)) {
+func (s *SQLiteStore) WatchReload(every time.Duration, onErr func(error)) {
 	go func() {
 		t := time.NewTicker(every)
 		defer t.Stop()
@@ -196,11 +239,11 @@ func (s *Store) WatchReload(every time.Duration, onErr func(error)) {
 	}()
 }
 
-func (s *Store) Tenant(routeID string) *Tenant {
+func (s *SQLiteStore) Tenant(routeID string) *Tenant {
 	return s.snap.Load().tenants[strings.ToLower(routeID)]
 }
 
-func (s *Store) TenantByIP(ip string) *Tenant {
+func (s *SQLiteStore) TenantByIP(ip string) *Tenant {
 	snap := s.snap.Load()
 	rid, ok := snap.byIP[ip]
 	if !ok {
@@ -211,7 +254,7 @@ func (s *Store) TenantByIP(ip string) *Tenant {
 
 // Allowed reports whether the name (or a parent of it) is on the tenant's
 // allowlist or the global one. Allowlist beats both blocklist and override.
-func (s *Store) Allowed(routeID, name string) bool {
+func (s *SQLiteStore) Allowed(routeID, name string) bool {
 	snap := s.snap.Load()
 	rid := strings.ToLower(routeID)
 	for _, suffix := range domainSuffixes(name) {
@@ -224,7 +267,7 @@ func (s *Store) Allowed(routeID, name string) bool {
 
 // Override returns the address to answer with, if this name or any parent of
 // it has an override. Tenant-specific rules beat global ones.
-func (s *Store) Override(routeID, name string) (netip.Addr, bool) {
+func (s *SQLiteStore) Override(routeID, name string) (netip.Addr, bool) {
 	snap := s.snap.Load()
 	rid := strings.ToLower(routeID)
 	for _, suffix := range domainSuffixes(name) {
@@ -238,11 +281,11 @@ func (s *Store) Override(routeID, name string) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
-func (s *Store) TenantCount() int { return len(s.snap.Load().tenants) }
+func (s *SQLiteStore) TenantCount() int { return len(s.snap.Load().tenants) }
 
 // ---- write paths, used by the admin API ----
 
-func (s *Store) CreateTenant(routeID, label string, expiresAt int64) error {
+func (s *SQLiteStore) CreateTenant(routeID, label string, expiresAt int64) error {
 	_, err := s.db.Exec(
 		`INSERT INTO tenants (route_id,label,status,expires_at,block_ads,paused_until,created_at)
 		 VALUES (?,?,'active',?,1,0,?)
@@ -251,25 +294,25 @@ func (s *Store) CreateTenant(routeID, label string, expiresAt int64) error {
 	return err
 }
 
-func (s *Store) SetStatus(routeID, status string) error {
+func (s *SQLiteStore) SetStatus(routeID, status string) error {
 	_, err := s.db.Exec(`UPDATE tenants SET status=? WHERE route_id=?`, status, strings.ToLower(routeID))
 	return err
 }
 
-func (s *Store) Extend(routeID string, expiresAt int64) error {
+func (s *SQLiteStore) Extend(routeID string, expiresAt int64) error {
 	_, err := s.db.Exec(`UPDATE tenants SET expires_at=? WHERE route_id=?`, expiresAt, strings.ToLower(routeID))
 	return err
 }
 
-func (s *Store) PauseFiltering(routeID string, until int64) error {
+func (s *SQLiteStore) PauseFiltering(routeID string, until int64) error {
 	_, err := s.db.Exec(`UPDATE tenants SET paused_until=? WHERE route_id=?`, until, strings.ToLower(routeID))
 	return err
 }
 
 // RegisterIP binds a source address to a tenant. This is what the "update my
-// IP" button in the dashboard calls, and it is the most-used control in the
+// IP" control in the dashboard calls, and it is the most-used action in the
 // product for customers on mobile networks.
-func (s *Store) RegisterIP(routeID, ip string) error {
+func (s *SQLiteStore) RegisterIP(routeID, ip string) error {
 	_, err := s.db.Exec(
 		`INSERT INTO tenant_ips (ip,route_id,added_at) VALUES (?,?,?)
 		 ON CONFLICT(ip) DO UPDATE SET route_id=excluded.route_id, added_at=excluded.added_at`,
@@ -277,24 +320,24 @@ func (s *Store) RegisterIP(routeID, ip string) error {
 	return err
 }
 
-func (s *Store) ReleaseIP(ip string) error {
+func (s *SQLiteStore) ReleaseIP(ip string) error {
 	_, err := s.db.Exec(`DELETE FROM tenant_ips WHERE ip=?`, ip)
 	return err
 }
 
-func (s *Store) AddAllow(routeID, domain string) error {
+func (s *SQLiteStore) AddAllow(routeID, domain string) error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO allowlist (route_id,domain) VALUES (?,?)`,
 		strings.ToLower(routeID), normalizeDomain(domain))
 	return err
 }
 
-func (s *Store) RemoveAllow(routeID, domain string) error {
+func (s *SQLiteStore) RemoveAllow(routeID, domain string) error {
 	_, err := s.db.Exec(`DELETE FROM allowlist WHERE route_id=? AND domain=?`,
 		strings.ToLower(routeID), normalizeDomain(domain))
 	return err
 }
 
-func (s *Store) SetOverride(routeID, domain, answer string) error {
+func (s *SQLiteStore) SetOverride(routeID, domain, answer string) error {
 	if _, err := netip.ParseAddr(answer); err != nil {
 		return fmt.Errorf("answer must be an IP address: %w", err)
 	}
@@ -305,8 +348,60 @@ func (s *Store) SetOverride(routeID, domain, answer string) error {
 	return err
 }
 
-func (s *Store) RemoveOverride(routeID, domain string) error {
+func (s *SQLiteStore) RemoveOverride(routeID, domain string) error {
 	_, err := s.db.Exec(`DELETE FROM overrides WHERE route_id=? AND domain=?`,
 		strings.ToLower(routeID), normalizeDomain(domain))
 	return err
+}
+
+// ---- usage accounting ----
+
+// RecordUsage applies a batch of counter increments in one transaction.
+// Counters are flushed periodically rather than written per query, so a busy
+// resolver does not turn every lookup into a database write.
+func (s *SQLiteStore) RecordUsage(counts map[string]UsageDelta) error {
+	if len(counts) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO tenant_usage (route_id,queries,blocked,overridden,throttled,last_seen,updated_at)
+		VALUES (?,?,?,?,?,?,?)
+		ON CONFLICT(route_id) DO UPDATE SET
+		  queries    = queries    + excluded.queries,
+		  blocked    = blocked    + excluded.blocked,
+		  overridden = overridden + excluded.overridden,
+		  throttled  = throttled  + excluded.throttled,
+		  last_seen  = MAX(last_seen, excluded.last_seen),
+		  updated_at = excluded.updated_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	now := time.Now().Unix()
+	for rid, d := range counts {
+		if _, err := stmt.Exec(rid, d.Queries, d.Blocked, d.Overridden, d.Throttled, d.LastSeen, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) Usage(routeID string) (Usage, bool) {
+	var u Usage
+	err := s.db.QueryRow(
+		`SELECT queries,blocked,overridden,throttled,last_seen FROM tenant_usage WHERE route_id=?`,
+		strings.ToLower(routeID),
+	).Scan(&u.Queries, &u.Blocked, &u.Overridden, &u.Throttled, &u.LastSeen)
+	if err != nil {
+		return Usage{}, false
+	}
+	return u, true
 }
