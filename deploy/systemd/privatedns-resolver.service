@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=privatedns
 Group=privatedns
-ExecStart=/usr/local/bin/privatedns-resolver -config /etc/private-dns/config.json
+ExecStart=/usr/local/bin/privatedns-resolver -config /etc/private-dns/config.yaml
 Restart=always
 RestartSec=3
 

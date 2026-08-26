@@ -70,6 +70,11 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | Subscription expiry and revocation | working |
 | Pause filtering (false-positive escape hatch) | working |
 | Provisioning REST API | working |
+| Per-tenant rate limiting | working |
+| EDNS Client Subnet stripping | working |
+| Health checks that probe real dependencies | working |
+| Aggregate per-tenant usage counters | working |
+| Versioned database migrations | working |
 | Prometheus metrics | working |
 | Backend API and admin dashboard | planned |
 | Customer portal | planned |
@@ -88,14 +93,25 @@ make build
 Create a configuration:
 
 ```bash
-cp configs/config.example.json config.json
+cp configs/config.example.yaml config.yaml
 ```
 
-Edit `config.json` — at minimum set `base_domain`, `upstreams`, the certificate
+Edit `config.yaml` — at minimum set `base_domain`, `upstreams`, the certificate
 paths, and generate an admin token with `openssl rand -hex 32`.
 
+Every key can also be set from the environment as `PRIVATEDNS_<KEY>`, which
+wins over the file — that is how one container image serves several
+deployments without being rebuilt:
+
 ```bash
-./privatedns-resolver -config config.json
+export PRIVATEDNS_BASE_DOMAIN=dns.example.com
+export PRIVATEDNS_UPSTREAMS=10.0.0.2:53,10.0.0.3:53
+```
+
+Both YAML and JSON are accepted; the format follows the file extension.
+
+```bash
+./privatedns-resolver -config config.yaml
 ```
 
 ## DNS records
@@ -180,6 +196,10 @@ Every route except `/metrics` and `/healthz` requires
 | DELETE | `/v1/ips/{ip}` | Unbind. |
 | POST | `/v1/overrides` | `domain`, `answer`, optional `route_id`. |
 | POST | `/v1/allow` | `domain`, optional `route_id`. |
+| GET | `/v1/tenants/{id}/usage` | Aggregate counters. No per-domain history exists to return. |
+| GET | `/health` | Liveness. Always 200 while the process runs. |
+| GET | `/ready` | Readiness. Probes store, schema, certificate expiry and a real upstream resolution; 503 if any fails. |
+| GET | `/version` | Build and schema version. |
 | GET | `/metrics` | Prometheus text format. |
 
 ## Security
@@ -208,6 +228,14 @@ from SQLite every second, and the tenant is looked up *per query* rather than
 per connection. A lapsed subscription therefore stops resolving even on a DoT
 connection a phone has held open for hours.
 
+**Rate limits exist because a tenant hostname is not a secret.** It travels in
+the SNI in cleartext and customers share them, so without a per-tenant limit one
+leaked hostname can be used to flood the resolver on that tenant's behalf.
+
+**EDNS Client Subnet is stripped from forwarded queries.** ECS tells the
+upstream which subnet the customer is on — a per-lookup location signal handed
+to a third party, which would contradict the product.
+
 **An IPv4 override deliberately answers `AAAA` with an empty `NOERROR`**, and
 suppresses `HTTPS`/`SVCB` records for overridden names. Returning the real IPv6
 address would let a dual-stack client prefer IPv6 and bypass the override
@@ -230,7 +258,7 @@ overrides, refusal of unknown tenants, and revocation.
 
 | Stage | Scope |
 |---|---|
-| 1 | Resolver hardening — rate limiting, fuzzing, ECS stripping, real health checks |
+| ~~1~~ | ~~Resolver hardening~~ — done |
 | 2 | Backend API — authentication, RBAC, audit log |
 | 3 | Admin dashboard |
 | 4 | Customer portal — IP registration, iOS profiles, diagnostics |

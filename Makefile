@@ -48,6 +48,15 @@ fmt-check: ## Fail if any file needs formatting
 	if [ -n "$$out" ]; then echo "needs gofmt:"; echo "$$out"; exit 1; fi
 	@echo "gofmt clean"
 
+.PHONY: fuzz
+fuzz: ## Run fuzz targets briefly (FUZZTIME=30s make fuzz)
+	go test -run "^$$" -fuzz FuzzUnpackAndResolve -fuzztime $(or $(FUZZTIME),30s) ./resolver
+	go test -run "^$$" -fuzz FuzzRouteIDFromSNI  -fuzztime $(or $(FUZZTIME),30s) ./resolver
+
+.PHONY: vuln
+vuln: ## Check dependencies for known vulnerabilities
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
 .PHONY: check
 check: fmt-check vet test ## Everything CI runs
 
