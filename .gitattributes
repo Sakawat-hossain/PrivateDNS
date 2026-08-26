@@ -29,4 +29,3 @@ Dockerfile  text eol=lf
 
 # Keep generated and vendored files out of diffs and language statistics.
 go.sum          -diff linguist-generated
-LICENSE         linguist-vendored
