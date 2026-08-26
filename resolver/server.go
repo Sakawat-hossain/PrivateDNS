@@ -37,6 +37,7 @@ type Server struct {
 	m       *Metrics
 	limiter *RateLimiter
 	usage   *UsageCollector
+	probes  *ProbeRecorder
 	health  *Health
 	log     *slog.Logger
 
@@ -82,6 +83,7 @@ func New(cfg Config) (*Server, error) {
 		m:       &Metrics{},
 		limiter: NewRateLimiter(cfg.RateLimitQPS, cfg.RateLimitBurst, cfg.MaxConnsPerTenant),
 		usage:   NewUsageCollector(store),
+		probes:  NewProbeRecorder(cfg.BaseDomain),
 		health:  NewHealth(cfg, store, block, Version),
 		log:     log,
 		stop:    make(chan struct{}),
@@ -90,10 +92,11 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) Close() error { return s.store.Close() }
 
-func (s *Server) Store() Store          { return s.store }
-func (s *Server) Blocklist() *Blocklist { return s.block }
-func (s *Server) Metrics() *Metrics     { return s.m }
-func (s *Server) Health() *Health       { return s.health }
+func (s *Server) Store() Store           { return s.store }
+func (s *Server) Blocklist() *Blocklist  { return s.block }
+func (s *Server) Metrics() *Metrics      { return s.m }
+func (s *Server) Health() *Health        { return s.health }
+func (s *Server) Probes() *ProbeRecorder { return s.probes }
 
 // Run starts every configured listener and blocks until one fails or ctx is
 // cancelled. Listeners with an empty address in the config are skipped.
@@ -126,6 +129,7 @@ func (s *Server) Run(ctx context.Context) error {
 	res := NewResolver(s.cfg, s.store, s.block, s.cache, s.m).
 		WithRateLimiter(s.limiter).
 		WithUsage(s.usage).
+		WithProbes(s.probes).
 		WithLogger(s.log)
 
 	listeners := NewListeners(s.cfg, res, s.store, tlsCfg).
@@ -134,6 +138,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	admin := NewAdmin(s.cfg, s.store, s.block, s.cache, s.m).
 		WithHealth(s.health).
+		WithProbes(s.probes).
 		WithRateLimiter(s.limiter).
 		WithLogger(s.log)
 

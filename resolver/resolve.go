@@ -33,6 +33,7 @@ type Resolver struct {
 	m       *Metrics
 	limiter *RateLimiter
 	usage   *UsageCollector
+	probes  *ProbeRecorder
 	log     *slog.Logger
 
 	udpClient *dns.Client
@@ -58,6 +59,12 @@ func (r *Resolver) WithRateLimiter(l *RateLimiter) *Resolver { r.limiter = l; re
 
 // WithUsage attaches the usage collector.
 func (r *Resolver) WithUsage(u *UsageCollector) *Resolver { r.usage = u; return r }
+
+// WithProbes attaches the diagnostic probe recorder.
+func (r *Resolver) WithProbes(p *ProbeRecorder) *Resolver { r.probes = p; return r }
+
+// Probes exposes the recorder so the portal can read results back.
+func (r *Resolver) Probes() *ProbeRecorder { return r.probes }
 
 // WithLogger attaches a structured logger.
 func (r *Resolver) WithLogger(l *slog.Logger) *Resolver {
@@ -121,6 +128,18 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 	}
 
 	name := normalizeDomain(q.Name)
+
+	// A diagnostic lookup is answered here, before policy. The probe must
+	// report the truth about reachability whatever the tenant blocks or
+	// overrides, and it is the arrival of the query -- not its answer -- that
+	// carries the signal.
+	if nonce, ok := r.probes.nonceFor(name); ok {
+		r.probes.Record(nonce, routeID, id.via)
+		r.usage.Record(routeID, false, false, false)
+		reply := probeReply(req)
+		setSynthesizedEDNS(reply, req)
+		return reply
+	}
 
 	// Allowlist wins over everything. A customer who cannot reach their bank
 	// needs a fix that beats both the blocklist and any override.

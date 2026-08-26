@@ -26,6 +26,7 @@ type Admin struct {
 	m       *Metrics
 	start   time.Time
 	health  *Health
+	probes  *ProbeRecorder
 	limiter *RateLimiter
 	log     *slog.Logger
 	srv     *http.Server
@@ -39,6 +40,8 @@ func NewAdmin(cfg Config, store Store, block *Blocklist, cache *Cache, m *Metric
 }
 
 func (a *Admin) WithHealth(h *Health) *Admin { a.health = h; return a }
+
+func (a *Admin) WithProbes(p *ProbeRecorder) *Admin { a.probes = p; return a }
 
 func (a *Admin) WithRateLimiter(r *RateLimiter) *Admin { a.limiter = r; return a }
 
@@ -73,6 +76,7 @@ func (a *Admin) Serve(addr string) error {
 	mux.HandleFunc("GET /version", a.versionz)
 
 	mux.HandleFunc("GET /v1/tenants/{id}/usage", a.auth(a.tenantUsage))
+	mux.HandleFunc("GET /v1/probes/{nonce}", a.auth(a.readProbe))
 
 	mux.HandleFunc("POST /v1/tenants", a.auth(a.createTenant))
 	mux.HandleFunc("POST /v1/tenants/{id}/revoke", a.auth(a.revokeTenant))
@@ -374,6 +378,7 @@ func (a *Admin) metrics(w http.ResponseWriter, r *http.Request) {
 	g("privatedns_blocklist_size", "Domains in the compiled blocklist.", int64(a.block.Size()))
 	g("privatedns_cache_entries", "Entries currently cached.", int64(a.cache.Len()))
 	g("privatedns_ratelimit_tracked", "Tenants with an active rate-limit bucket.", int64(a.limiter.Tracked()))
+	g("privatedns_probes_pending", "Diagnostic probes awaiting readback.", int64(a.probes.Pending()))
 	g("privatedns_uptime_seconds", "Process uptime.", int64(time.Since(a.start).Seconds()))
 
 	if v, err := a.store.SchemaVersion(); err == nil {
@@ -464,4 +469,23 @@ func NewRouteID() (string, error) {
 		buf[i] = alphabet[int(buf[i])%len(alphabet)]
 	}
 	return string(buf), nil
+}
+
+// readProbe reports whether a diagnostic lookup arrived, and as which tenant.
+//
+// The portal calls this after asking a browser to resolve a one-off hostname.
+// Reading consumes the record, so a nonce cannot be replayed to make a second
+// device appear configured.
+func (a *Admin) readProbe(w http.ResponseWriter, r *http.Request) {
+	res := a.probes.Lookup(r.PathValue("nonce"))
+	if !res.Found {
+		writeJSON(w, http.StatusOK, map[string]any{"found": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"found":    true,
+		"route_id": res.RouteID,
+		"protocol": res.Proto,
+		"at":       res.At.Unix(),
+	})
 }
