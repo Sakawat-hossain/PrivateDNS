@@ -15,9 +15,9 @@ Redis, no cgo, no runtime dependencies.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-> **Status: early development.** The resolver is working and tested. The
-> backend API, admin dashboard and installer are not built yet — see
-> [Roadmap](#roadmap). Do not run this in production.
+> **Status: early development.** The resolver and backend API are working and
+> tested. The admin dashboard, customer portal and installer are not built yet
+> — see [Roadmap](#roadmap). Do not run this in production.
 
 ## How it works
 
@@ -76,7 +76,11 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | Aggregate per-tenant usage counters | working |
 | Versioned database migrations | working |
 | Prometheus metrics | working |
-| Backend API and admin dashboard | planned |
+| Backend API with sessions, API tokens and RBAC | working |
+| Tenant isolation across resellers and customers | working |
+| Append-only audit log | working |
+| Generated OpenAPI specification | working |
+| Admin dashboard | planned |
 | Customer portal | planned |
 | Installer, Docker, packages | planned |
 
@@ -241,6 +245,60 @@ suppresses `HTTPS`/`SVCB` records for overridden names. Returning the real IPv6
 address would let a dual-stack client prefer IPv6 and bypass the override
 entirely; `HTTPS` records carry their own address hints and would do the same.
 
+## Backend API
+
+A second binary, `privatedns-backend`, serves administration and provisioning.
+It shares the resolver's database rather than keeping its own, so a revocation
+takes effect on the API, the resolver and the proxy at once.
+
+```bash
+sudo cp configs/backend.example.yaml /etc/private-dns/backend.yaml
+PRIVATEDNS_ADMIN_PASSWORD='your-password' privatedns-backend -create-admin you@example.com
+privatedns-backend -config /etc/private-dns/backend.yaml
+```
+
+The password comes from the environment rather than a flag because command-line
+arguments are visible to every process on the host through the process table.
+There is no self-registration: the first account is created deliberately.
+
+The full route list is at `/openapi.json`, generated from the same catalogue the
+router is built from so it cannot drift.
+
+### Authentication
+
+Two mechanisms, for two kinds of caller:
+
+- **Session cookies** for browsers. `HttpOnly`, `Secure`, `SameSite=Lax`, with a
+  CSRF token returned in the login response body that must be echoed in the
+  `X-CSRF-Token` header on every mutating request.
+- **API tokens** for machines. Prefixed `pdns_`, shown once, stored only as a
+  SHA-256 hash. Bearer tokens are exempt from CSRF by construction — a browser
+  never attaches an `Authorization` header cross-site.
+
+Passwords are hashed with argon2id at the OWASP baseline parameters.
+
+### Roles and scopes
+
+| Role | Sees |
+|---|---|
+| `admin` | Everything, including the audit log and answer overrides |
+| `reseller` | Only the customers it owns, and their tenants |
+| `customer` | Only its own tenants |
+
+A token can never carry a scope its owner's role does not permit, and the check
+runs per request — so demoting a user immediately narrows every token they had
+already issued.
+
+`tenants:bind_ip` is deliberately separate from `tenants:write`. Binding a
+source address is the customer-facing "update my IP" control; issuing and
+extending subscriptions is not something a customer should be able to do.
+
+### What a denial looks like
+
+Access denied on a tenant or customer returns **404, not 403**. A 403 would
+confirm the record exists, which is enough for one reseller to enumerate a
+competitor's customer identifiers.
+
 ## Development
 
 ```bash
@@ -259,7 +317,7 @@ overrides, refusal of unknown tenants, and revocation.
 | Stage | Scope |
 |---|---|
 | ~~1~~ | ~~Resolver hardening~~ — done |
-| 2 | Backend API — authentication, RBAC, audit log |
+| ~~2~~ | ~~Backend API — authentication, RBAC, audit log~~ — done |
 | 3 | Admin dashboard |
 | 4 | Customer portal — IP registration, iOS profiles, diagnostics |
 | 5 | Deployment — Docker, Debian packages, installer |

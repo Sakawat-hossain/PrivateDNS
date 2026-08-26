@@ -1,0 +1,42 @@
+[Unit]
+Description=PrivateDNS backend API
+Documentation=https://github.com/Sakawat-hossain/PrivateDNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privatedns
+Group=privatedns
+ExecStart=/usr/local/bin/privatedns-backend -config /etc/private-dns/backend.yaml
+Restart=always
+RestartSec=3
+
+# The backend binds a high port and needs no capabilities at all.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+ReadWritePaths=/var/lib/private-dns
+ReadOnlyPaths=/etc/private-dns
+
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

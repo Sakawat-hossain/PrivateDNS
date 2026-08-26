@@ -1,0 +1,71 @@
+# PrivateDNS backend API configuration.
+#
+# Copy to /etc/private-dns/backend.yaml and edit.
+
+# The API binds to loopback by default and is expected to sit behind Nginx,
+# which terminates TLS and serves the dashboard from the same origin.
+listen: 127.0.0.1:8080
+
+# The resolver's database, shared. One source of truth about who has paid, so
+# a revocation takes effect on the API, the resolver and the proxy at once.
+policy_db: /var/lib/private-dns/policy.db
+
+# Used to render tenant hostnames back to callers.
+base_domain: dns.example.com
+
+# ---------------------------------------------------------------------------
+# Browser access
+# ---------------------------------------------------------------------------
+#
+# An explicit allowlist. There is no wildcard and no origin reflection:
+# reflecting the Origin header while allowing credentials makes every site on
+# the internet a trusted origin for an authenticated API.
+#
+# Leave empty when the dashboard is served from the same origin, which is the
+# recommended arrangement.
+cors_origins: []
+
+# Peers permitted to set X-Forwarded-For. Leave empty unless the backend really
+# sits behind a reverse proxy you control — trusting the header unconditionally
+# lets any client spoof its address and defeat both rate limiting and login
+# throttling.
+trusted_proxies: []
+#  - 127.0.0.1
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+session_ttl: 12h
+
+# Marks the session cookie Secure. Set false ONLY for local development over
+# plain HTTP; leaving it false in production exposes the cookie to any network
+# observer.
+secure_cookies: true
+
+# ---------------------------------------------------------------------------
+# Abuse controls
+# ---------------------------------------------------------------------------
+
+# Requests per second, keyed by principal where one is known and by source
+# address otherwise. Keying on the principal matters here: rate limiting purely
+# by IP would make users behind one carrier-grade NAT throttle each other, and
+# CGNAT is widespread in Bangladesh.
+rate_limit_qps: 20
+rate_limit_burst: 60
+
+# Failed sign-ins tolerated per account within the window. The source address
+# is allowed three times this before being throttled, so one host cannot spray
+# many accounts and a distributed attempt cannot slip past a per-account limit.
+max_login_failures: 10
+login_window: 15m
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+#
+# Request paths and status codes only. Bodies are never logged: the sign-in
+# route carries a password in its body.
+
+log_level: info
+log_format: text

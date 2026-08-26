@@ -2,6 +2,8 @@ SHELL := /bin/sh
 
 BINARY      := privatedns-resolver
 CMD         := ./cmd/privatedns-resolver
+BACKEND     := privatedns-backend
+BACKEND_CMD := ./cmd/privatedns-backend
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 DIST        := dist
@@ -18,8 +20,9 @@ help: ## Show this help
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build the resolver for the host platform
+build: ## Build the resolver and backend for the host platform
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
+	go build -ldflags "$(LDFLAGS)" -o $(BACKEND) $(BACKEND_CMD)
 
 .PHONY: test
 test: ## Run the full test suite
@@ -36,7 +39,7 @@ cover: ## Run tests and report coverage
 
 .PHONY: fmt
 fmt: ## Format all Go source
-	gofmt -w ./cmd ./resolver
+	gofmt -w ./cmd ./resolver ./backend
 
 .PHONY: vet
 vet: ## Run go vet
@@ -44,7 +47,7 @@ vet: ## Run go vet
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any file needs formatting
-	@out="$$(gofmt -l ./cmd ./resolver)"; \
+	@out="$$(gofmt -l ./cmd ./resolver ./backend)"; \
 	if [ -n "$$out" ]; then echo "needs gofmt:"; echo "$$out"; exit 1; fi
 	@echo "gofmt clean"
 
@@ -65,6 +68,8 @@ release: ## Cross-compile release binaries into dist/
 	@mkdir -p $(DIST)
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-amd64 $(CMD)
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 $(CMD)
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BACKEND)-linux-amd64 $(BACKEND_CMD)
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BACKEND)-linux-arm64 $(BACKEND_CMD)
 	@cd $(DIST) && sha256sum $(BINARY)-* > SHA256SUMS
 	@ls -lh $(DIST)
 
@@ -74,7 +79,7 @@ docker: ## Build the container image
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -rf $(DIST) $(BINARY) $(BINARY).exe coverage.out
+	rm -rf $(DIST) $(BINARY) $(BINARY).exe $(BACKEND) $(BACKEND).exe coverage.out
 
 .PHONY: version
 version: ## Print the version this build would carry
