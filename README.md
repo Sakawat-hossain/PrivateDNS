@@ -15,9 +15,9 @@ Redis, no cgo, no runtime dependencies.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-> **Status: early development.** The resolver, backend API and customer portal
-> are working and tested. The admin dashboard and installer are not built yet —
-> see [Roadmap](#roadmap). Do not run this in production.
+> **Status: early development.** The resolver, backend API, customer portal and
+> operator dashboard are working and tested. The installer, Docker packaging and
+> CI are not built yet — see [Roadmap](#roadmap). Do not run this in production.
 
 ## How it works
 
@@ -83,7 +83,7 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | Customer portal, bilingual and installable | working |
 | iOS configuration profile generator | working |
 | DNS-check diagnostic | working |
-| Admin dashboard | planned |
+| Operator dashboard with reseller isolation | working |
 | Installer, Docker, packages | planned |
 
 ## Quick start
@@ -344,6 +344,49 @@ portal's `trusted_proxies`. The portal binds whatever source address it
 observes, so without both, every customer would be bound to nginx's loopback
 address and the proxy tier would authorise nobody.
 
+## Operator dashboard
+
+A fourth binary, `privatedns-admin`. Customers, tenants, routing, triage,
+audit and accounts.
+
+```bash
+sudo cp configs/admin.example.yaml /etc/private-dns/admin.yaml
+privatedns-admin -config /etc/private-dns/admin.yaml
+```
+
+> **This one is not meant to face the internet.** It binds `127.0.0.1` by
+> default and logs a warning if you change that. Reach it over a VPN or an SSH
+> tunnel:
+>
+> ```bash
+> ssh -L 8082:127.0.0.1:8082 you@your-server
+> ```
+
+### Roles
+
+| | Administrator | Reseller |
+|---|---|---|
+| Customers and tenants | all | **only its own** |
+| Triage queue | all | only its own |
+| Routing overrides | yes | no |
+| Audit log | yes | no |
+| System page | yes | no |
+| Operator accounts | yes | no |
+| API tokens | any scope | only scopes its role holds |
+
+Authorisation is per row rather than per page: a reseller reaches the same
+routes an administrator does, and what differs is which records answer. Access
+denied returns the same 404 a missing record gives, so probing identifiers
+cannot map a competitor's book -- and resellers are competitors.
+
+### Triage
+
+The page worth knowing about. It lists customers who reached for the pause
+button in the last week, which is the clearest available signal that something
+legitimate is being blocked -- they were trying to use a site and could not.
+The fix is one field on the same row, and it defaults to applying for every
+tenant, because a false positive rarely affects only one customer.
+
 ## Development
 
 ```bash
@@ -364,7 +407,7 @@ overrides, refusal of unknown tenants, and revocation.
 | ~~1~~ | ~~Resolver hardening~~ — done |
 | ~~2~~ | ~~Backend API — authentication, RBAC, audit log~~ — done |
 | ~~3~~ | ~~Customer portal — IP registration, iOS profiles, diagnostics~~ — done |
-| 4 | Admin dashboard |
+| ~~4~~ | ~~Operator dashboard — customers, tenants, routing, triage, audit~~ — done |
 | 5 | Deployment — Docker, Debian packages, installer |
 | 6 | CI/CD, signed releases, security review |
 
