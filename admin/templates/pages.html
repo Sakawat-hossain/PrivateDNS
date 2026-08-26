@@ -1,0 +1,644 @@
+{{define "overview.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>Overview</h1>
+
+  {{with .Overview}}
+  <div class="tiles">
+    <div class="tile">
+      <span class="k">Active tenants</span>
+      <span class="v">{{comma (int64 .ActiveTenant)}}</span>
+      <span class="sub">of {{.Tenants}} total</span>
+    </div>
+    <div class="tile">
+      <span class="k">Customers</span>
+      <span class="v">{{comma (int64 .Customers)}}</span>
+    </div>
+    <div class="tile {{if gt .ExpiringSoon 0}}attention{{end}}">
+      <span class="k">Expiring this week</span>
+      <span class="v">{{comma (int64 .ExpiringSoon)}}</span>
+      <span class="sub">renew before they lapse</span>
+    </div>
+    <div class="tile">
+      <span class="k">Queries</span>
+      <span class="v">{{comma .Queries}}</span>
+      <span class="sub">{{pct .BlockRate}} blocked</span>
+    </div>
+  </div>
+
+  {{if .Resolver}}
+  <section class="card">
+    <h2>Resolver</h2>
+    {{if .Resolver.Reachable}}
+      <dl class="kv">
+        <div><dt>Status</dt><dd><span class="pill ok">reachable</span></dd></div>
+        <div><dt>Version</dt><dd>{{.Resolver.Version}}</dd></div>
+        <div><dt>Uptime</dt><dd>{{.Resolver.Uptime}}</dd></div>
+        <div><dt>Blocklist</dt><dd>{{comma .Resolver.BlocklistSize}} domains</dd></div>
+        <div><dt>Cache</dt><dd>{{comma .Resolver.CacheEntries}} entries</dd></div>
+        <div><dt>Refused</dt><dd>{{comma .Resolver.Refused}}</dd></div>
+        <div><dt>Throttled</dt><dd>{{comma .Resolver.Throttled}}</dd></div>
+        <div><dt>Upstream errors</dt><dd>{{comma .Resolver.UpstreamErr}}</dd></div>
+      </dl>
+    {{else}}
+      <p class="flash error">The resolver admin API is not answering. Statistics below are from the
+      database and may lag; live cache and blocklist figures are unavailable.</p>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Recent}}
+  <section class="card">
+    <h2>Recent activity</h2>
+    <table>
+      <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th></tr></thead>
+      <tbody>
+      {{range .Recent}}
+        <tr>
+          <td class="num">{{since .At}}</td>
+          <td>{{.ActorLabel}}</td>
+          <td><code>{{.Action}}</code></td>
+          <td>{{.TargetID}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    <p><a href="/audit">Full audit log</a></p>
+  </section>
+  {{end}}
+  {{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "customers.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>Customers</h1>
+
+  <details class="card">
+    <summary>Add a customer</summary>
+    <form method="post" action="/customers" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div><label for="c-name">Name</label><input id="c-name" name="name" required></div>
+      <div><label for="c-email">Email</label><input id="c-email" name="email" type="email"></div>
+      <div><label for="c-phone">Phone</label><input id="c-phone" name="phone"></div>
+      <div class="span"><button type="submit" class="primary">Create</button></div>
+    </form>
+  </details>
+
+  {{if .Customers}}
+  <table class="card">
+    <thead><tr><th>Name</th><th>Contact</th><th>Tenants</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {{range .Customers}}
+      <tr>
+        <td><a href="/customers/{{.ID}}">{{.Name}}</a></td>
+        <td class="muted">{{if .Email}}{{.Email}}{{else}}{{.Phone}}{{end}}</td>
+        <td class="num">{{.ActiveCount}} / {{.TenantCount}}</td>
+        <td><span class="pill {{if eq .Status "active"}}ok{{else}}bad{{end}}">{{.Status}}</span></td>
+        <td class="right"><a href="/customers/{{.ID}}">Open</a></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No customers yet.</p>
+  {{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "customer.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  {{with .Customer}}
+  <h1>{{.Name}}</h1>
+  <p class="muted">{{.Email}} {{if .Phone}}· {{.Phone}}{{end}} · created {{ts .CreatedAt}}</p>
+
+  <section class="card">
+    <h2>Tenants</h2>
+    {{if .Tenants}}
+    <table>
+      <thead><tr><th>Hostname</th><th>Label</th><th>Expires</th><th>Queries</th><th>Status</th></tr></thead>
+      <tbody>
+      {{range .Tenants}}
+        <tr>
+          <td><a href="/tenants/{{.RouteID}}"><code>{{.Hostname}}</code></a></td>
+          <td class="muted">{{.Label}}</td>
+          <td class="num">{{until .ExpiresAt}}</td>
+          <td class="num">{{comma .Queries}}</td>
+          <td>
+            <span class="pill {{if .Active}}ok{{else}}bad{{end}}">{{.Status}}</span>
+            {{if not .Filtering}}<span class="pill warn">paused</span>{{end}}
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="muted">No tenants issued.</p>{{end}}
+  </section>
+  {{end}}
+
+  <details class="card">
+    <summary>Issue a tenant</summary>
+    <form method="post" action="/customers/{{.Customer.ID}}/tenants" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div>
+        <label for="plan">Plan</label>
+        <select id="plan" name="plan_code">
+          <option value="">— use days below —</option>
+          {{range .Plans}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div><label for="days">Days</label><input id="days" name="days" type="number" min="0" value="30"></div>
+      <div><label for="label">Label</label><input id="label" name="label" placeholder="phone, router…"></div>
+      <div class="span"><button type="submit" class="primary">Issue</button></div>
+    </form>
+    <p class="hint">A hostname is generated automatically. Identifiers avoid look-alike
+    characters, because customers read them off a screen and type them into a phone.</p>
+  </details>
+
+  <details class="card">
+    <summary>Edit customer</summary>
+    <form method="post" action="/customers/{{.Customer.ID}}" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div><label for="e-name">Name</label><input id="e-name" name="name" value="{{.Customer.Name}}" required></div>
+      <div><label for="e-phone">Phone</label><input id="e-phone" name="phone" value="{{.Customer.Phone}}"></div>
+      <div>
+        <label for="e-status">Status</label>
+        <select id="e-status" name="status">
+          <option value="active" {{if eq .Customer.Status "active"}}selected{{end}}>active</option>
+          <option value="disabled" {{if eq .Customer.Status "disabled"}}selected{{end}}>disabled</option>
+        </select>
+      </div>
+      <div class="span"><label for="e-notes">Notes</label><input id="e-notes" name="notes" value="{{.Customer.Notes}}"></div>
+      <div class="span"><button type="submit">Save</button></div>
+    </form>
+  </details>
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "tenant.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  {{with .Tenant}}
+  <h1><code>{{.Hostname}}</code></h1>
+  <p>
+    <span class="pill {{if .Active}}ok{{else}}bad{{end}}">{{.Status}}</span>
+    {{if not .Filtering}}<span class="pill warn">filtering paused</span>{{end}}
+    <span class="muted">expires {{ts .ExpiresAt}} ({{until .ExpiresAt}})</span>
+    {{if .CustomerID}}<a href="/customers/{{.CustomerID}}">customer</a>{{end}}
+  </p>
+
+  <div class="tiles">
+    <div class="tile"><span class="k">Queries</span><span class="v">{{comma .Queries}}</span></div>
+    <div class="tile"><span class="k">Blocked</span><span class="v">{{comma .Blocked}}</span></div>
+    <div class="tile"><span class="k">Overridden</span><span class="v">{{comma .Overridden}}</span></div>
+    <div class="tile {{if gt .Throttled 0}}attention{{end}}">
+      <span class="k">Throttled</span><span class="v">{{comma .Throttled}}</span>
+      <span class="sub">rate limit hits</span>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>Bound addresses</h2>
+    {{if .BoundIPs}}
+      <ul class="chips">{{range .BoundIPs}}<li><code>{{.}}</code></li>{{end}}</ul>
+      <p class="hint">The proxy tier authorises these. Customers rebind their own from the portal.</p>
+    {{else}}
+      <p class="muted">None bound. Plain DNS and the proxy tier will refuse this tenant
+      until an address is registered from the customer portal.</p>
+    {{end}}
+  </section>
+
+  <section class="card">
+    <h2>Allowlist</h2>
+    {{if .Allowlist}}
+    <table>
+      <tbody>
+      {{range .Allowlist}}
+        <tr>
+          <td><code>{{.}}</code></td>
+          <td class="right">
+            <form method="post" action="/tenants/{{$.Tenant.RouteID}}/allow/remove" class="inline">
+              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+              <input type="hidden" name="domain" value="{{.}}">
+              <button type="submit" class="linkish">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="muted">Empty.</p>{{end}}
+
+    <form method="post" action="/tenants/{{.RouteID}}/allow" class="inlineform">
+      <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      <input name="domain" placeholder="example.com" required>
+      <button type="submit">Allow</button>
+    </form>
+    <p class="hint">Allowlist beats both the blocklist and any override, which is what makes
+    a false positive on a bank login a one-row fix.</p>
+  </section>
+
+  <section class="card">
+    <h2>Subscription</h2>
+    <form method="post" action="/tenants/{{.RouteID}}/extend" class="inlineform">
+      <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      <select name="plan_code">
+        <option value="">— days —</option>
+        {{range $.Plans}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+      </select>
+      <input name="days" type="number" min="1" value="30" style="max-width:7rem">
+      <button type="submit" class="primary">Renew</button>
+    </form>
+    <p class="hint">Renewing early adds to the remaining time rather than replacing it.</p>
+
+    <form method="post" action="/tenants/{{.RouteID}}/revoke" class="inlineform"
+          data-confirm="Suspend this tenant? DNS stops resolving within a second.">
+      <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+      <button type="submit" class="danger">Suspend</button>
+    </form>
+  </section>
+  {{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "policy.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>Routing</h1>
+  <p class="muted">An override answers a domain with an address you control instead of the real
+  one. It only does something useful if the proxy tier has a matching route — an override
+  pointing nowhere is a connection that refuses.</p>
+
+  <section class="card">
+    <h2>Add an override</h2>
+    <form method="post" action="/policy/overrides" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div><label for="o-domain">Domain</label><input id="o-domain" name="domain" placeholder="example.com" required></div>
+      <div><label for="o-answer">Answer</label><input id="o-answer" name="answer" placeholder="203.0.113.10" required></div>
+      <div><label for="o-scope">Tenant</label><input id="o-scope" name="route_id" placeholder="blank = all tenants"></div>
+      <div class="span"><button type="submit" class="primary">Save override</button></div>
+    </form>
+    <p class="hint">A rule on a parent domain covers everything beneath it.</p>
+  </section>
+
+  <section class="card">
+    <h2>Current overrides</h2>
+    {{if .Overrides}}
+    <table>
+      <thead><tr><th>Domain</th><th>Answer</th><th>Scope</th><th></th></tr></thead>
+      <tbody>
+      {{range .Overrides}}
+        <tr>
+          <td><code>{{.Domain}}</code></td>
+          <td><code>{{.Answer}}</code></td>
+          <td>{{if eq .Scope "*"}}<span class="pill warn">all tenants</span>{{else}}<code>{{.Scope}}</code>{{end}}</td>
+          <td class="right">
+            <form method="post" action="/policy/overrides/remove" class="inline">
+              <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+              <input type="hidden" name="domain" value="{{.Domain}}">
+              <input type="hidden" name="route_id" value="{{.Scope}}">
+              <button type="submit" class="linkish">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    {{else}}<p class="muted">No overrides configured.</p>{{end}}
+  </section>
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "triage.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>Triage</h1>
+  <p class="muted">Customers who reached for the pause button in the last seven days. Pausing is
+  the clearest signal available that something legitimate is being blocked — they were trying
+  to use a site and could not.</p>
+
+  {{if .Triage}}
+  <table class="card">
+    <thead><tr><th>Customer</th><th>Tenant</th><th>Pauses</th><th>Last</th><th>Fix</th></tr></thead>
+    <tbody>
+    {{range .Triage}}
+      <tr>
+        <td>{{.Customer}}</td>
+        <td><a href="/tenants/{{.RouteID}}"><code>{{.RouteID}}</code></a></td>
+        <td class="num {{if gt .Pauses 2}}attention{{end}}">{{.Pauses}}</td>
+        <td class="num muted">{{since .PausedAt}}</td>
+        <td>
+          <form method="post" action="/triage/allow" class="inlineform">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="route_id" value="{{.RouteID}}">
+            <input name="domain" placeholder="domain to allow" required>
+            {{if $.IsAdmin}}
+            <label class="check"><input type="checkbox" name="global"> all tenants</label>
+            {{end}}
+            <button type="submit">Allow</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p class="hint">A false positive usually affects everyone, so fixing it for one customer
+  leaves the same complaint waiting from the rest. Prefer the all-tenants option.</p>
+  {{else}}
+  <p class="muted">Nothing in the queue. No customer has paused filtering this week.</p>
+  {{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "system.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>System</h1>
+  {{with .System}}
+  <section class="card">
+    <h2>Resolver</h2>
+    {{if .Resolver.Reachable}}
+      <dl class="kv">
+        <div><dt>Status</dt><dd><span class="pill ok">reachable</span></dd></div>
+        <div><dt>Version</dt><dd>{{.Resolver.Version}}</dd></div>
+        <div><dt>Uptime</dt><dd>{{.Resolver.Uptime}}</dd></div>
+        <div><dt>Tenants loaded</dt><dd>{{comma .Resolver.Tenants}}</dd></div>
+        <div><dt>Blocklist</dt><dd>{{comma .Resolver.BlocklistSize}}</dd></div>
+        <div><dt>Cache entries</dt><dd>{{comma .Resolver.CacheEntries}}</dd></div>
+      </dl>
+    {{else}}
+      <p class="flash error">Not answering on its admin API. Check the service is running and
+      that <code>resolver_admin</code> points at it.</p>
+    {{end}}
+  </section>
+
+  <section class="card">
+    <h2>This dashboard</h2>
+    <dl class="kv">
+      <div><dt>Base domain</dt><dd><code>{{.BaseDomain}}</code></dd></div>
+      <div><dt>Schema version</dt><dd>{{.SchemaVersion}}</dd></div>
+      <div><dt>Uptime</dt><dd>{{.Uptime}}</dd></div>
+      <div><dt>Operator accounts</dt><dd>{{.Users}}</dd></div>
+      <div><dt>Audit entries</dt><dd>{{comma .AuditEntries}}</dd></div>
+    </dl>
+  </section>
+  {{end}}
+
+  <section class="card">
+    <h2>Upstream DNS</h2>
+    <p class="muted">Upstreams are set in the resolver's own configuration file and applied on
+    restart. They are shown here rather than edited, because a dashboard that could rewrite
+    the resolver's config would need write access to it — and this process deliberately has
+    none.</p>
+    <p class="hint">Edit <code>/etc/private-dns/config.yaml</code>, then
+    <code>systemctl restart privatedns-resolver</code>.</p>
+  </section>
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "audit.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  <h1>Audit log</h1>
+  <form method="get" action="/audit" class="inlineform">
+    <input name="action" placeholder="action, e.g. tenant.revoke" value="{{index .Query "action"}}">
+    <input name="target_id" placeholder="target id" value="{{index .Query "target_id"}}">
+    <button type="submit">Filter</button>
+    <a class="linkish" href="/audit">Clear</a>
+  </form>
+
+  {{if .Audit}}
+  <table class="card">
+    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th><th>From</th></tr></thead>
+    <tbody>
+    {{range .Audit}}
+      <tr>
+        <td class="num" title="{{ts .At}}">{{since .At}}</td>
+        <td>{{.ActorLabel}} <span class="muted">{{.ActorType}}</span></td>
+        <td><code>{{.Action}}</code></td>
+        <td>{{if .TargetID}}<code>{{.TargetID}}</code>{{end}}</td>
+        <td class="muted small">{{.Detail}}</td>
+        <td class="muted">{{.IP}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="muted">No entries match.</p>{{end}}
+  <p class="hint">The log is append-only. Entries are never edited or deleted by the
+  application — a log that can be altered from the same interface it audits is not evidence
+  of anything.</p>
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "tokens.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>API tokens</h1>
+
+  {{if .NewToken}}
+  <div class="card reveal">
+    <h2>Copy this now</h2>
+    <p class="muted">Only a hash is stored. This is the one time the value can be shown.</p>
+    <div class="copyrow">
+      <code id="newtoken">{{.NewToken}}</code>
+      <button type="button" class="copy" data-copy="newtoken">Copy</button>
+    </div>
+  </div>
+  {{end}}
+
+  <details class="card">
+    <summary>Create a token</summary>
+    <form method="post" action="/tokens" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div><label for="t-name">Name</label><input id="t-name" name="name" required placeholder="billing integration"></div>
+      <div><label for="t-days">Expires in days</label><input id="t-days" name="days" type="number" min="0" placeholder="blank = never"></div>
+      <div class="span">
+        <label>Scopes</label>
+        <div class="scopes">
+          <label class="check"><input type="checkbox" name="scopes" value="tenants:read"> tenants:read</label>
+          <label class="check"><input type="checkbox" name="scopes" value="tenants:write"> tenants:write</label>
+          <label class="check"><input type="checkbox" name="scopes" value="customers:read"> customers:read</label>
+          <label class="check"><input type="checkbox" name="scopes" value="customers:write"> customers:write</label>
+          <label class="check"><input type="checkbox" name="scopes" value="policy:read"> policy:read</label>
+          <label class="check"><input type="checkbox" name="scopes" value="policy:write"> policy:write</label>
+          <label class="check"><input type="checkbox" name="scopes" value="stats:read"> stats:read</label>
+          {{if .IsAdmin}}
+          <label class="check"><input type="checkbox" name="scopes" value="system:read"> system:read</label>
+          <label class="check"><input type="checkbox" name="scopes" value="audit:read"> audit:read</label>
+          {{end}}
+        </div>
+      </div>
+      <div class="span"><button type="submit" class="primary">Create</button></div>
+    </form>
+    <p class="hint">Grant only what the integration needs. A token can never exceed your own
+    role, and is narrowed further if your role changes later.</p>
+  </details>
+
+  {{if .Tokens}}
+  <table class="card">
+    <thead><tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+    {{range .Tokens}}
+      <tr {{if ne .RevokedAt 0}}class="dim"{{end}}>
+        <td>{{.Name}}</td>
+        <td><code>{{.Prefix}}…</code></td>
+        <td class="muted small">{{.Scopes}}</td>
+        <td class="num muted">{{since .LastUsedAt}}</td>
+        <td class="num muted">{{if eq .ExpiresAt 0}}never{{else}}{{until .ExpiresAt}}{{end}}</td>
+        <td class="right">
+          {{if eq .RevokedAt 0}}
+          <form method="post" action="/tokens/{{.ID}}/revoke" class="inline"
+                data-confirm="Revoke this token? Anything using it stops working immediately.">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <button type="submit" class="linkish danger">Revoke</button>
+          </form>
+          {{else}}<span class="pill bad">revoked</span>{{end}}
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="muted">No tokens.</p>{{end}}
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
+
+
+{{define "users.html"}}
+<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body>
+{{template "nav" .}}
+<main>
+  {{template "flash" .}}
+  <h1>Operator accounts</h1>
+
+  <details class="card">
+    <summary>Add an account</summary>
+    <form method="post" action="/users" class="grid">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <div><label for="u-email">Email</label><input id="u-email" name="email" type="email" required></div>
+      <div><label for="u-name">Name</label><input id="u-name" name="name"></div>
+      <div><label for="u-pass">Password</label><input id="u-pass" name="password" type="password" required minlength="12"></div>
+      <div>
+        <label for="u-role">Role</label>
+        <select id="u-role" name="role">
+          <option value="reseller">reseller</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <div class="span"><button type="submit" class="primary">Create</button></div>
+    </form>
+    <p class="hint">A reseller sees only the customers it owns. Customer logins are created
+    with the customer record, not here.</p>
+  </details>
+
+  <table class="card">
+    <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Last sign-in</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {{range .Users}}
+      <tr {{if ne .Status "active"}}class="dim"{{end}}>
+        <td>{{.Email}}</td>
+        <td class="muted">{{.Name}}</td>
+        <td><span class="pill">{{.Role}}</span></td>
+        <td class="num muted">{{since .LastLoginAt}}</td>
+        <td><span class="pill {{if eq .Status "active"}}ok{{else}}bad{{end}}">{{.Status}}</span></td>
+        <td class="right">
+          <form method="post" action="/users/{{.ID}}/status" class="inline">
+            <input type="hidden" name="csrf_token" value="{{$.CSRF}}">
+            <input type="hidden" name="status" value="{{if eq .Status "active"}}disabled{{else}}active{{end}}">
+            <button type="submit" class="linkish">{{if eq .Status "active"}}Disable{{else}}Enable{{end}}</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p class="hint">Disabling an account signs out every session it holds, rather than only
+  preventing the next sign-in.</p>
+</main>
+{{template "foot" .}}
+</body>
+</html>
+{{end}}
