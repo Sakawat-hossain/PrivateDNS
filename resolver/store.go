@@ -39,6 +39,13 @@ type Store interface {
 	RecordUsage(counts map[string]UsageDelta) error
 	Usage(routeID string) (Usage, bool)
 
+	// Listing, for the operator dashboard. These read the database directly
+	// rather than the serving snapshot: an operator wants the committed truth,
+	// not what the resolver happens to have cached this second.
+	ListAllow(routeID string) ([]string, error)
+	ListIPs(routeID string) ([]string, error)
+	ListOverrides() ([]OverrideRow, error)
+
 	// Lifecycle.
 	Reload() error
 	WatchReload(every time.Duration, onErr func(error))
@@ -404,4 +411,74 @@ func (s *SQLiteStore) Usage(routeID string) (Usage, bool) {
 		return Usage{}, false
 	}
 	return u, true
+}
+
+// OverrideRow is one answer-override rule as stored.
+type OverrideRow struct {
+	RouteID string
+	Domain  string
+	Answer  string
+}
+
+// ListAllow returns a tenant's allowlist entries.
+func (s *SQLiteStore) ListAllow(routeID string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT domain FROM allowlist WHERE route_id=? ORDER BY domain`,
+		strings.ToLower(routeID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ListIPs returns the source addresses bound to a tenant.
+func (s *SQLiteStore) ListIPs(routeID string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT ip FROM tenant_ips WHERE route_id=? ORDER BY added_at DESC`,
+		strings.ToLower(routeID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, err
+		}
+		out = append(out, ip)
+	}
+	return out, rows.Err()
+}
+
+// ListOverrides returns every override rule, global ones first.
+func (s *SQLiteStore) ListOverrides() ([]OverrideRow, error) {
+	rows, err := s.db.Query(
+		`SELECT route_id, domain, answer FROM overrides
+		 ORDER BY CASE route_id WHEN '*' THEN 0 ELSE 1 END, domain`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []OverrideRow
+	for rows.Next() {
+		var o OverrideRow
+		if err := rows.Scan(&o.RouteID, &o.Domain, &o.Answer); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }
