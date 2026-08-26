@@ -79,7 +79,7 @@ func TestBlocklistMatchesParents(t *testing.T) {
 // newTestResolver builds a resolver backed by a temporary database, with no
 // reachable upstream — every test below asserts on a decision made before the
 // query would be forwarded.
-func newTestResolver(t *testing.T) (*Resolver, *Store) {
+func newTestResolver(t *testing.T) (*Resolver, *SQLiteStore) {
 	t.Helper()
 
 	store, err := OpenStore(filepath.Join(t.TempDir(), "policy.db"))

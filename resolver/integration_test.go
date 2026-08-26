@@ -85,7 +85,7 @@ func fakeUpstream(t *testing.T) string {
 
 // startDoT wires a full server stack onto an ephemeral port and returns its
 // address plus the policy store, so tests can provision tenants.
-func startDoT(t *testing.T) (string, *Store) {
+func startDoT(t *testing.T) (string, *SQLiteStore) {
 	t.Helper()
 
 	store, err := OpenStore(filepath.Join(t.TempDir(), "policy.db"))
