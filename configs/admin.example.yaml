@@ -1,0 +1,67 @@
+# PrivateDNS operator dashboard configuration.
+#
+# Copy to /etc/private-dns/admin.yaml and edit.
+#
+# Unlike the customer portal, this is NOT meant to face the public internet.
+# It issues and revokes tenants, edits routing, and reads an audit log that
+# spans every reseller. Keep it on loopback and reach it over a VPN or an SSH
+# tunnel, or put it behind an authenticating proxy on a private network.
+#
+# The dashboard logs a warning at startup if this is not a loopback address.
+
+listen: 127.0.0.1:8082
+
+policy_db: /var/lib/private-dns/policy.db
+base_domain: dns.example.com
+brand_name: PrivateDNS
+
+# ---------------------------------------------------------------------------
+# Resolver status
+# ---------------------------------------------------------------------------
+#
+# The overview and system pages scrape the resolver's Prometheus endpoint for
+# live figures — cache size, blocklist size, uptime, refusals, throttling.
+# Both pages still render if this is unreachable; they say so instead, because
+# an operator investigating an outage needs those pages most.
+
+resolver_admin: http://127.0.0.1:8053
+resolver_token: ""
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+#
+# Deliberately much shorter than the customer portal's thirty days. An operator
+# session can create and revoke tenants; one left valid on a shared machine is
+# a different class of risk from a customer checking their own expiry.
+
+session_ttl: 8h
+
+# Set false ONLY for local development over plain HTTP.
+secure_cookies: true
+
+# ---------------------------------------------------------------------------
+# Behind a reverse proxy
+# ---------------------------------------------------------------------------
+#
+# Only list a proxy you control. Trusting X-Forwarded-For from anywhere lets a
+# client spoof its address and defeat login throttling.
+
+trusted_proxies: []
+
+# ---------------------------------------------------------------------------
+# Abuse controls
+# ---------------------------------------------------------------------------
+
+rate_limit_qps: 20
+rate_limit_burst: 60
+
+max_login_failures: 10
+login_window: 15m
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+log_level: info
+log_format: text
