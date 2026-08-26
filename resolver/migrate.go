@@ -3,24 +3,47 @@ package resolver
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"sync"
 	"time"
 )
 
-// migration is one forward schema step. Migrations are applied in Version
+// Migration is one forward schema step. Migrations are applied in Version
 // order inside a transaction and recorded, so a given version runs exactly
 // once against a database.
 //
 // Never edit a migration that has shipped. Anyone already running it will not
 // re-apply the changed version, so their schema silently diverges. Add a new
 // migration instead.
-type migration struct {
+type Migration struct {
 	Version int
 	Name    string
 	SQL     string
 }
 
+// RegisterMigrations adds schema steps owned by another package.
+//
+// The resolver and the backend share one SQLite database, and one database can
+// only have one ordered migration history -- two independent trackers against
+// the same file would race and diverge. So each package owns its own
+// migrations and registers them here, where they are merged into a single
+// ordered sequence.
+//
+// Version ranges are partitioned by owner to keep them from colliding:
+// 1-99 belongs to the resolver, 100+ to the backend.
+func RegisterMigrations(extra ...Migration) {
+	migrationsMu.Lock()
+	defer migrationsMu.Unlock()
+	migrations = append(migrations, extra...)
+	sort.Slice(migrations, func(i, j int) bool {
+		return migrations[i].Version < migrations[j].Version
+	})
+}
+
+var migrationsMu sync.Mutex
+
 // migrations is the ordered schema history.
-var migrations = []migration{
+var migrations = []Migration{
 	{
 		Version: 1,
 		Name:    "initial schema",
@@ -90,6 +113,8 @@ CREATE INDEX IF NOT EXISTS idx_allowlist_route ON allowlist(route_id);
 
 // SchemaVersion is the version a freshly migrated database ends at.
 func SchemaVersion() int {
+	migrationsMu.Lock()
+	defer migrationsMu.Unlock()
 	if len(migrations) == 0 {
 		return 0
 	}
@@ -100,6 +125,11 @@ func SchemaVersion() int {
 // it has not already recorded. Each runs in its own transaction, so a failure
 // leaves the database at the last good version rather than half-applied.
 func migrate(db *sql.DB) (applied int, err error) {
+	migrationsMu.Lock()
+	pending := make([]Migration, len(migrations))
+	copy(pending, migrations)
+	migrationsMu.Unlock()
+
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 		  version    INTEGER PRIMARY KEY,
@@ -127,7 +157,7 @@ func migrate(db *sql.DB) (applied int, err error) {
 		return 0, err
 	}
 
-	for _, m := range migrations {
+	for _, m := range pending {
 		if done[m.Version] {
 			continue
 		}
