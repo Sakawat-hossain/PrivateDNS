@@ -1,0 +1,48 @@
+[Unit]
+Description=PrivateDNS multi-tenant filtering resolver
+Documentation=https://github.com/Sakawat-hossain/PrivateDNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privatedns
+Group=privatedns
+ExecStart=/usr/local/bin/privatedns-resolver -config /etc/private-dns/config.json
+Restart=always
+RestartSec=3
+
+# Binding 53, 443 and 853 needs this one capability, not root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# The resolver reads its config and certificates, and writes one SQLite file.
+# Everything else is denied.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+ReadWritePaths=/var/lib/private-dns
+ReadOnlyPaths=/etc/private-dns
+
+# DNS is connection-heavy; the default file limit is too low under load.
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
