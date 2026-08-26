@@ -411,3 +411,24 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// VerifyUserPassword checks a password against a loaded user. The hash is
+// unexported, so callers outside this package go through here.
+func (s *Store) VerifyUserPassword(u *User, password string) error {
+	if u == nil {
+		return ErrInvalidCredentials
+	}
+	return VerifyPassword(password, u.passwordHash)
+}
+
+// BurnPasswordTime spends roughly the same time a real verification costs.
+//
+// Called when no account matched, so that a missing account and a wrong
+// password are indistinguishable by timing.
+func (s *Store) BurnPasswordTime(password string) {
+	_ = VerifyPassword(password, timingReference)
+}
+
+// timingReference is a valid argon2id hash of a value nobody knows.
+var timingReference = "$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVmZ2hpamtsbW5vcA$" +
+	"Q6mQpMDBHRQ0Q4dnMxwGVGx9pXn6mZ0kQGxN8vFqZ0g"

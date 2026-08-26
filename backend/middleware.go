@@ -414,3 +414,7 @@ func Chain(h http.Handler, mw ...func(http.Handler) http.Handler) http.Handler {
 }
 
 var errUnauthenticated = errors.New("authentication required")
+
+// ClientIP is the exported form used by the portal, so trusted-proxy handling
+// is implemented once rather than diverging between the two surfaces.
+func ClientIP(r *http.Request) string { return clientIP(r) }
