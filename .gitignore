@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# Secrets and operator data. Nothing here may ever reach the repository.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+cloudflare.env
+credentials.json
+secrets.yaml
+
+# Live configuration. Only the .example files are tracked; a real config
+# carries the operator's domain, admin tokens and upstream addresses.
+config.json
+config.yaml
+config.yml
+configs/config.json
+configs/config.yaml
+!configs/*.example.*
+
+# Databases and customer data.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/
+backups/
+
+# Blocklist feeds are fetched at runtime, not vendored.
+blocklists/*.txt
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+/privatedns-resolver
+/privatedns-backend
+*.exe
+*.dll
+*.so
+*.dylib
+/dist/
+/build/
+/bin/
+
+# Go
+*.test
+*.out
+coverage.*
+vendor/
+
+# Node / frontend
+node_modules/
+.next/
+.nuxt/
+.vite/
+frontend/dist/
+frontend/build/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
