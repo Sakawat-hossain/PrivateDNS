@@ -1,0 +1,42 @@
+[Unit]
+Description=PrivateDNS customer portal
+Documentation=https://github.com/Sakawat-hossain/PrivateDNS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=privatedns
+Group=privatedns
+ExecStart=/usr/local/bin/privatedns-portal -config /etc/private-dns/portal.yaml
+Restart=always
+RestartSec=3
+
+# Binds a high port behind nginx, so no capabilities are needed.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+ReadWritePaths=/var/lib/private-dns
+ReadOnlyPaths=/etc/private-dns
+
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

@@ -15,9 +15,9 @@ Redis, no cgo, no runtime dependencies.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-> **Status: early development.** The resolver and backend API are working and
-> tested. The admin dashboard, customer portal and installer are not built yet
-> — see [Roadmap](#roadmap). Do not run this in production.
+> **Status: early development.** The resolver, backend API and customer portal
+> are working and tested. The admin dashboard and installer are not built yet —
+> see [Roadmap](#roadmap). Do not run this in production.
 
 ## How it works
 
@@ -80,8 +80,10 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | Tenant isolation across resellers and customers | working |
 | Append-only audit log | working |
 | Generated OpenAPI specification | working |
+| Customer portal, bilingual and installable | working |
+| iOS configuration profile generator | working |
+| DNS-check diagnostic | working |
 | Admin dashboard | planned |
-| Customer portal | planned |
 | Installer, Docker, packages | planned |
 
 ## Quick start
@@ -182,7 +184,9 @@ provider hostname* → enter the tenant hostname.
 kdig @dns.example.com +tls-hostname=k7mp2qx9rt.dns.example.com +tls example.com
 ```
 
-**iOS** requires a configuration profile; the generator is on the roadmap.
+**iOS** has no user interface for DNS-over-TLS at all. The customer portal
+generates a per-tenant configuration profile at `/profile.mobileconfig`, which
+the customer opens and installs through Settings.
 
 ## API
 
@@ -299,6 +303,47 @@ Access denied on a tenant or customer returns **404, not 403**. A 403 would
 confirm the record exists, which is enough for one reseller to enumerate a
 competitor's customer identifiers.
 
+## Customer portal
+
+A third binary, `privatedns-portal`, is what customers actually use. It is
+separate from the backend API on purpose: the portal is meant to face the
+public internet, the administration API is not, and one process would force a
+single exposure decision on both.
+
+```bash
+sudo cp configs/portal.example.yaml /etc/private-dns/portal.yaml
+privatedns-portal -config /etc/private-dns/portal.yaml
+```
+
+Server-rendered Go with embedded templates rather than a JavaScript
+application. It is a handful of pages, it ships inside the binary with no build
+step, and a customer on a metered connection abroad does not pay for a bundle.
+
+### What it does
+
+- **Update my IP**, one tap. The most-used control in the product: a customer
+  abroad moves between mobile data and Wi-Fi constantly, and each move changes
+  the address the proxy tier authorises against. It always binds the address
+  the request arrived from, never one the client nominates.
+- **iOS configuration profile**, generated per tenant. iOS has no interface for
+  DoT, so without this every iPhone customer is a support conversation.
+- **DNS check**, reachable without signing in. A web page cannot read the
+  system resolver, so it asks for a hostname nobody has ever looked up and the
+  resolver reports whether that query arrived. That single fact resolves most
+  "I set it up but it is not working" conversations.
+- **Pause filtering** for five minutes, so a false positive is self-service.
+- **Bengali and English**, switchable. Both competitors ship Bengali-first
+  interfaces, and it is clearly working for them.
+- **Installable as a PWA**, which sidesteps app-store review for a category
+  stores are hostile to.
+
+### One deployment detail that matters
+
+Behind nginx, `X-Forwarded-For` must be set **and** the proxy listed in the
+portal's `trusted_proxies`. The portal binds whatever source address it
+observes, so without both, every customer would be bound to nginx's loopback
+address and the proxy tier would authorise nobody.
+
 ## Development
 
 ```bash
@@ -318,8 +363,8 @@ overrides, refusal of unknown tenants, and revocation.
 |---|---|
 | ~~1~~ | ~~Resolver hardening~~ — done |
 | ~~2~~ | ~~Backend API — authentication, RBAC, audit log~~ — done |
-| 3 | Admin dashboard |
-| 4 | Customer portal — IP registration, iOS profiles, diagnostics |
+| ~~3~~ | ~~Customer portal — IP registration, iOS profiles, diagnostics~~ — done |
+| 4 | Admin dashboard |
 | 5 | Deployment — Docker, Debian packages, installer |
 | 6 | CI/CD, signed releases, security review |
 

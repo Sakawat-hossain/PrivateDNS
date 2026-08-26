@@ -4,6 +4,8 @@ BINARY      := privatedns-resolver
 CMD         := ./cmd/privatedns-resolver
 BACKEND     := privatedns-backend
 BACKEND_CMD := ./cmd/privatedns-backend
+PORTAL      := privatedns-portal
+PORTAL_CMD  := ./cmd/privatedns-portal
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 DIST        := dist
@@ -23,6 +25,7 @@ help: ## Show this help
 build: ## Build the resolver and backend for the host platform
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) $(CMD)
 	go build -ldflags "$(LDFLAGS)" -o $(BACKEND) $(BACKEND_CMD)
+	go build -ldflags "$(LDFLAGS)" -o $(PORTAL) $(PORTAL_CMD)
 
 .PHONY: test
 test: ## Run the full test suite
@@ -39,7 +42,7 @@ cover: ## Run tests and report coverage
 
 .PHONY: fmt
 fmt: ## Format all Go source
-	gofmt -w ./cmd ./resolver ./backend
+	gofmt -w ./cmd ./resolver ./backend ./portal
 
 .PHONY: vet
 vet: ## Run go vet
@@ -47,7 +50,7 @@ vet: ## Run go vet
 
 .PHONY: fmt-check
 fmt-check: ## Fail if any file needs formatting
-	@out="$$(gofmt -l ./cmd ./resolver ./backend)"; \
+	@out="$$(gofmt -l ./cmd ./resolver ./backend ./portal)"; \
 	if [ -n "$$out" ]; then echo "needs gofmt:"; echo "$$out"; exit 1; fi
 	@echo "gofmt clean"
 
@@ -70,6 +73,8 @@ release: ## Cross-compile release binaries into dist/
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 $(CMD)
 	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BACKEND)-linux-amd64 $(BACKEND_CMD)
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(BACKEND)-linux-arm64 $(BACKEND_CMD)
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(PORTAL)-linux-amd64 $(PORTAL_CMD)
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(PORTAL)-linux-arm64 $(PORTAL_CMD)
 	@cd $(DIST) && sha256sum $(BINARY)-* > SHA256SUMS
 	@ls -lh $(DIST)
 
@@ -79,7 +84,7 @@ docker: ## Build the container image
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -rf $(DIST) $(BINARY) $(BINARY).exe $(BACKEND) $(BACKEND).exe coverage.out
+	rm -rf $(DIST) $(BINARY) $(BINARY).exe $(BACKEND) $(BACKEND).exe $(PORTAL) $(PORTAL).exe coverage.out
 
 .PHONY: version
 version: ## Print the version this build would carry

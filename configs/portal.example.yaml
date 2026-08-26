@@ -1,0 +1,85 @@
+# PrivateDNS customer portal configuration.
+#
+# Copy to /etc/private-dns/portal.yaml and edit.
+#
+# This is the one component meant to face the public internet. The backend API
+# and the resolver's admin API are not — which is why the portal is a separate
+# binary on its own listener rather than another path on the API.
+
+listen: 127.0.0.1:8081
+
+# The resolver's database, shared. The portal reads tenant state and writes
+# source-address bindings; it never touches operator data.
+policy_db: /var/lib/private-dns/policy.db
+
+# Tenant hostnames are rendered as <route_id>.<base_domain>, and this value
+# goes into the iOS configuration profile.
+base_domain: dns.example.com
+
+# Shown in the interface, the browser tab, and the iOS profile a customer
+# installs into their device settings.
+brand_name: PrivateDNS
+
+# Where "renew" and "contact us" point. A WhatsApp link is the norm for this
+# market and works from a phone without an app switch:
+#   https://wa.me/8801XXXXXXXXX
+support_url: ""
+
+# ---------------------------------------------------------------------------
+# DNS diagnostic
+# ---------------------------------------------------------------------------
+#
+# The check page asks the browser to resolve a one-off hostname and then asks
+# the resolver whether that query arrived. That is the only way a web page can
+# tell whether a device is actually using this resolver.
+#
+# Point these at the resolver's admin API. It is loopback-bound, so the portal
+# normally has to run on the same host; if it does not, expose the admin API on
+# a private interface rather than publicly.
+
+resolver_admin: http://127.0.0.1:8053
+resolver_token: ""    # the resolver's admin token; set from the environment in production
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+# Deliberately long. Customers are not operators: someone checking their DNS
+# once a month should not be signed out between visits. The session grants only
+# what a customer can already do — see their own status, rebind their own
+# address, pause their own filtering.
+session_ttl: 720h    # 30 days
+
+# Set false ONLY for local development over plain HTTP.
+secure_cookies: true
+
+# ---------------------------------------------------------------------------
+# Behind a reverse proxy
+# ---------------------------------------------------------------------------
+#
+# Nginx terminates TLS in front of this. List it here so X-Forwarded-For is
+# honoured — the portal binds whatever address it observes, so without this
+# every customer would be bound to the proxy's address instead of their own.
+#
+# Equally, do not list an address you do not control: trusting the header from
+# anywhere lets a client spoof its address and bind someone else's.
+
+trusted_proxies:
+  - 127.0.0.1
+
+# ---------------------------------------------------------------------------
+# Abuse controls
+# ---------------------------------------------------------------------------
+
+rate_limit_qps: 10
+rate_limit_burst: 30
+
+max_login_failures: 10
+login_window: 15m
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+log_level: info
+log_format: text
