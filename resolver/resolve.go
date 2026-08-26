@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync/atomic"
@@ -17,33 +18,53 @@ type Metrics struct {
 	Overridden atomic.Uint64
 	Allowed    atomic.Uint64
 	Refused    atomic.Uint64
+	Throttled  atomic.Uint64
+	Malformed  atomic.Uint64
 	CacheHits  atomic.Uint64
 	Upstream   atomic.Uint64
 	UpstreamNG atomic.Uint64
 }
 
 type Resolver struct {
-	cfg   Config
-	store *Store
-	block *Blocklist
-	cache *Cache
-	m     *Metrics
+	cfg     Config
+	store   Store
+	block   *Blocklist
+	cache   *Cache
+	m       *Metrics
+	limiter *RateLimiter
+	usage   *UsageCollector
+	log     *slog.Logger
 
 	udpClient *dns.Client
 	tcpClient *dns.Client
 	nextUp    atomic.Uint32
 }
 
-func NewResolver(cfg Config, store *Store, block *Blocklist, cache *Cache, m *Metrics) *Resolver {
+func NewResolver(cfg Config, store Store, block *Blocklist, cache *Cache, m *Metrics) *Resolver {
 	return &Resolver{
 		cfg:       cfg,
 		store:     store,
 		block:     block,
 		cache:     cache,
 		m:         m,
-		udpClient: &dns.Client{Net: "udp", Timeout: 4 * time.Second},
+		log:       slog.Default(),
+		udpClient: &dns.Client{Net: "udp", Timeout: 4 * time.Second, UDPSize: maxUDPSize},
 		tcpClient: &dns.Client{Net: "tcp", Timeout: 6 * time.Second},
 	}
+}
+
+// WithRateLimiter attaches a limiter. A nil limiter disables rate limiting.
+func (r *Resolver) WithRateLimiter(l *RateLimiter) *Resolver { r.limiter = l; return r }
+
+// WithUsage attaches the usage collector.
+func (r *Resolver) WithUsage(u *UsageCollector) *Resolver { r.usage = u; return r }
+
+// WithLogger attaches a structured logger.
+func (r *Resolver) WithLogger(l *slog.Logger) *Resolver {
+	if l != nil {
+		r.log = l
+	}
+	return r
 }
 
 // identity is how a query is attributed to a tenant. The tenant lookup happens
@@ -63,15 +84,22 @@ func (r *Resolver) tenantFor(id identity) *Tenant {
 }
 
 // Resolve runs one query through the policy pipeline and returns the reply.
-// req must contain exactly one question, which is true of essentially all real
-// DNS traffic.
 func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 	r.m.Queries.Add(1)
 
+	// A well-formed DNS query carries exactly one question. Anything else is
+	// either broken or an attempt to confuse the parser, and is rejected
+	// before it reaches policy or the upstream.
 	if len(req.Question) != 1 {
+		r.m.Malformed.Add(1)
 		return errorReply(req, dns.RcodeFormatError)
 	}
 	q := req.Question[0]
+	if !validQuestion(q) {
+		r.m.Malformed.Add(1)
+		return errorReply(req, dns.RcodeFormatError)
+	}
+
 	now := time.Now().Unix()
 
 	// Unidentified or lapsed tenants get REFUSED rather than an answer. This is
@@ -81,9 +109,18 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 		r.m.Refused.Add(1)
 		return errorReply(req, dns.RcodeRefused)
 	}
+	routeID := tenant.RouteID
+
+	// A tenant hostname travels in the SNI in cleartext and customers share
+	// them. Rate limiting is what stops one leaked hostname being used to
+	// flood the resolver on that tenant's behalf.
+	if !r.limiter.Allow(routeID) {
+		r.m.Throttled.Add(1)
+		r.usage.Record(routeID, false, false, true)
+		return errorReply(req, dns.RcodeRefused)
+	}
 
 	name := normalizeDomain(q.Name)
-	routeID := tenant.RouteID
 
 	// Allowlist wins over everything. A customer who cannot reach their bank
 	// needs a fix that beats both the blocklist and any override.
@@ -98,15 +135,22 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 		if addr, ok := r.store.Override(routeID, name); ok {
 			if reply, handled := overrideReply(req, q, addr); handled {
 				r.m.Overridden.Add(1)
+				r.usage.Record(routeID, false, true, false)
+				setSynthesizedEDNS(reply, req)
 				return reply
 			}
 		}
 
 		if tenant.Filtering(now) && r.block.Blocked(name) {
 			r.m.Blocked.Add(1)
-			return blockedReply(req)
+			r.usage.Record(routeID, true, false, false)
+			reply := blockedReply(req)
+			setSynthesizedEDNS(reply, req)
+			return reply
 		}
 	}
+
+	r.usage.Record(routeID, false, false, false)
 
 	if cached, ok := r.cache.Get(q); ok {
 		r.m.CacheHits.Add(1)
@@ -118,6 +162,7 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 	reply, err := r.forward(req)
 	if err != nil {
 		r.m.UpstreamNG.Add(1)
+		r.log.Debug("upstream failure", "domain", redactName(name), "err", err)
 		return errorReply(req, dns.RcodeServerFailure)
 	}
 	r.m.Upstream.Add(1)
@@ -125,6 +170,23 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 
 	reply.Id = req.Id
 	return reply
+}
+
+// validQuestion rejects questions that cannot be legitimate, before they reach
+// the policy engine or an upstream.
+func validQuestion(q dns.Question) bool {
+	if q.Name == "" || len(q.Name) > 255 {
+		return false
+	}
+	// Only the internet class is served. CHAOS and HESIOD queries are used for
+	// fingerprinting and have no place here.
+	if q.Qclass != dns.ClassINET {
+		return false
+	}
+	if _, ok := dns.IsDomainName(q.Name); !ok {
+		return false
+	}
+	return true
 }
 
 // forward sends the query upstream, trying each configured resolver in turn.
@@ -137,8 +199,7 @@ func (r *Resolver) forward(req *dns.Msg) (*dns.Msg, error) {
 	// Start at a rotating offset so load spreads across upstreams.
 	start := int(r.nextUp.Add(1)) % len(ups)
 
-	out := req.Copy()
-	out.Id = dns.Id()
+	out := prepareUpstream(req, r.cfg.StripECS)
 
 	var lastErr error
 	for i := 0; i < len(ups); i++ {
