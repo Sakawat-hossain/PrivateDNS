@@ -130,11 +130,43 @@ download_release() {
   done
 
   step "Verifying"
+
+  # Signature first, where possible.
+  #
+  # A checksum proves the download matches SHA256SUMS. It says nothing about
+  # whether SHA256SUMS itself is genuine — an attacker who can substitute the
+  # binaries can substitute that file alongside them. The cosign signature is
+  # what makes the checksums worth checking, because it binds them to this
+  # project's release workflow.
+  if command -v cosign >/dev/null 2>&1; then
+    if curl -fsSL "${base}/SHA256SUMS.sig" -o "${WORK}/SHA256SUMS.sig" 2>/dev/null &&
+       curl -fsSL "${base}/SHA256SUMS.pem" -o "${WORK}/SHA256SUMS.pem" 2>/dev/null; then
+      if cosign verify-blob \
+           --signature "${WORK}/SHA256SUMS.sig" \
+           --certificate "${WORK}/SHA256SUMS.pem" \
+           --certificate-identity-regexp "^https://github.com/${REPO}/\.github/workflows/release\.yml@" \
+           --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+           "${WORK}/SHA256SUMS" >/dev/null 2>&1; then
+        ok "signature verified"
+      else
+        fail "SIGNATURE VERIFICATION FAILED — nothing has been changed"
+      fi
+    else
+      warn "this release carries no signature; falling back to checksums alone"
+    fi
+  else
+    # Not fatal: cosign is not installed by default anywhere, and refusing to
+    # update without it would push people toward downloading binaries by hand,
+    # which is worse. But it is worth saying.
+    warn "cosign is not installed; verifying checksums only"
+    warn "  install it to verify signatures: https://docs.sigstore.dev/cosign/installation/"
+  fi
+
   ( cd "$WORK" && grep -E "linux-${ARCH}\$|linux-${ARCH} " SHA256SUMS > wanted.txt || true
     [[ -s wanted.txt ]] || { echo "no matching checksums" >&2; exit 1; }
     sha256sum -c --ignore-missing wanted.txt >/dev/null 2>&1 ) \
     || fail "checksum verification FAILED — nothing has been changed"
-  ok "verified"
+  ok "checksums verified"
 
   # A binary that will not even report its version is not one to install.
   chmod +x "${WORK}/privatedns-resolver-linux-${ARCH}"

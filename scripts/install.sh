@@ -150,10 +150,34 @@ download_and_verify() {
     curl -fsSL "${base}/${binary}" -o "${WORK}/${binary}" \
       || fail "could not download ${binary}"
   done
-
   # Verifying every binary against the published checksums. A download that
   # was corrupted or substituted stops here rather than being installed.
-  step "Verifying checksums"
+  step "Verifying"
+
+  # Signature first, where possible.
+  #
+  # A checksum only proves the download matches SHA256SUMS. It says nothing
+  # about whether SHA256SUMS is genuine — an attacker able to substitute the
+  # binaries can substitute that file alongside them. The cosign signature is
+  # what makes the checksums worth checking, because it binds them to this
+  # project's release workflow.
+  if command -v cosign >/dev/null 2>&1 &&
+     curl -fsSL "${base}/SHA256SUMS.sig" -o "${WORK}/SHA256SUMS.sig" 2>/dev/null &&
+     curl -fsSL "${base}/SHA256SUMS.pem" -o "${WORK}/SHA256SUMS.pem" 2>/dev/null; then
+    if cosign verify-blob \
+         --signature "${WORK}/SHA256SUMS.sig" \
+         --certificate "${WORK}/SHA256SUMS.pem" \
+         --certificate-identity-regexp "^https://github.com/${REPO}/\.github/workflows/release\.yml@" \
+         --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+         "${WORK}/SHA256SUMS" >/dev/null 2>&1; then
+      ok "signature verified"
+    else
+      fail "SIGNATURE VERIFICATION FAILED — do not proceed"
+    fi
+  else
+    warn "not verifying signatures (cosign not installed, or none published)"
+  fi
+
   ( cd "$WORK" && grep -E "linux-${ARCH}\$|linux-${ARCH} " SHA256SUMS > wanted.txt || true
     [[ -s wanted.txt ]] || { echo "no checksums matched this architecture" >&2; exit 1; }
     sha256sum -c --ignore-missing wanted.txt >/dev/null 2>&1 ) \
