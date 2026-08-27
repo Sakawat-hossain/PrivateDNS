@@ -97,13 +97,6 @@ sha256sum -c install.sh.sha256
 sudo bash install.sh
 ```
 
-Or with Docker:
-
-```bash
-cp .env.example .env
-docker compose up -d
-```
-
 Full detail, including the three things that remain after installing, is in
 [docs/installation.md](docs/installation.md).
 

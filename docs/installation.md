@@ -2,22 +2,7 @@
 
 Three ways, in order of preference.
 
-## 1. Debian package (recommended)
-
-A package manager gives you upgrade, rollback, integrity checking and clean
-removal without any of it being reimplemented in a shell script.
-
-```bash
-curl -fsSLO https://github.com/Sakawat-hossain/PrivateDNS/releases/latest/download/privatedns_amd64.deb
-curl -fsSLO https://github.com/Sakawat-hossain/PrivateDNS/releases/latest/download/SHA256SUMS
-sha256sum -c --ignore-missing SHA256SUMS
-sudo apt install ./privatedns_amd64.deb
-```
-
-Installing keeps your data. `apt remove` keeps it too; only `apt purge`
-deletes it.
-
-## 2. Installer script
+## 1. Installer script (recommended today)
 
 ```bash
 curl -fsSLO https://github.com/Sakawat-hossain/PrivateDNS/releases/latest/download/install.sh
@@ -42,13 +27,28 @@ prints what remains.
 It is safe to re-run: an existing installation is upgraded and **configuration
 files that already exist are never overwritten**.
 
-## 3. Docker
+## 2. Debian package — not yet published
+
+> **There is no `.deb` in the current release.** The packaging is written and
+> reviewed but has never been built, so it is not published rather than shipped
+> untested. It arrives with the first CI run.
+
+When it does, a package manager is the better path: it gives upgrade, rollback,
+integrity checking and clean removal without any of it being reimplemented in a
+shell script. `apt remove` will keep your data; only `apt purge` deletes it.
+
+## 3. Docker — not yet published
+
+> **No image has been built or pushed.** `Dockerfile` and `docker-compose.yml`
+> are in the repository and can be built locally, but nothing is published to a
+> registry yet.
+
 
 ```bash
 git clone https://github.com/Sakawat-hossain/PrivateDNS.git
 cd PrivateDNS
 cp .env.example .env
-docker compose up -d
+docker compose up -d          # builds locally; nothing is pulled
 ```
 
 All four services share one image and one volume, and must run on the same
