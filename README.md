@@ -171,6 +171,18 @@ reads the DNS provider credential from a root-only file you create on the
 server:
 
 ```bash
+The Cloudflare API token needs **two** permissions, both scoped to the single
+zone you are using:
+
+| Scope | Resource | Level | Why |
+|-------|----------|-------|-----|
+| Zone  | DNS      | Edit  | write the `_acme-challenge` TXT record |
+| Zone  | Zone     | Read  | resolve the zone ID before writing to it |
+
+`DNS:Edit` alone fails at the zone lookup, with an error that does not say
+which permission is missing. Leave the TTL empty -- renewal is unattended, and
+a token that expires takes the service down at a date nobody is watching.
+
 sudo sh -c 'printf "CF_DNS_API_TOKEN=your_token\n" > /etc/private-dns/cloudflare.env'
 sudo chmod 600 /etc/private-dns/cloudflare.env
 sudo ACME_EMAIL=you@example.com BASE_DOMAIN=dns.example.com \
