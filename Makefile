@@ -11,6 +11,7 @@ ADMIN_CMD   := ./cmd/privatedns-admin
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 DIST        := dist
+IMAGE       ?= privatedns
 
 # CGO stays off deliberately: the SQLite driver is pure Go, so every target
 # below produces a static binary that runs on any Linux without libraries.
@@ -67,7 +68,7 @@ vuln: ## Check dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: check
-check: fmt-check vet test ## Everything CI runs
+check: fmt-check vet test scripts-check ## Everything CI runs
 
 .PHONY: release
 release: ## Cross-compile release binaries into dist/
@@ -83,10 +84,6 @@ release: ## Cross-compile release binaries into dist/
 	@cd $(DIST) && sha256sum $(BINARY)-* > SHA256SUMS
 	@ls -lh $(DIST)
 
-.PHONY: docker
-docker: ## Build the container image
-	docker build -t privatedns:$(VERSION) .
-
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf $(DIST) $(BINARY) $(BINARY).exe $(BACKEND) $(BACKEND).exe $(PORTAL) $(PORTAL).exe $(ADMIN) $(ADMIN).exe coverage.out
@@ -94,3 +91,27 @@ clean: ## Remove build output
 .PHONY: version
 version: ## Print the version this build would carry
 	@echo $(VERSION)
+
+.PHONY: deb
+deb: release ## Build .deb packages (needs a Debian or Ubuntu host)
+	deploy/debian/build-deb.sh $(VERSION) amd64
+	deploy/debian/build-deb.sh $(VERSION) arm64
+
+.PHONY: docker
+docker: ## Build the container image
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
+
+.PHONY: scripts-check
+scripts-check: ## Syntax-check every shipped shell script
+	@for f in scripts/install.sh scripts/update.sh scripts/uninstall.sh \
+	          scripts/private-dns deploy/scripts/*.sh deploy/debian/build-deb.sh; do \
+	  bash -n "$$f" || exit 1; \
+	done
+	@for f in deploy/debian/postinst deploy/debian/prerm deploy/debian/postrm; do \
+	  sh -n "$$f" || exit 1; \
+	done
+	@echo "shell scripts parse"
+
+.PHONY: checksums
+checksums: release ## Regenerate SHA256SUMS over dist/
+	@cd $(DIST) && sha256sum privatedns-* > SHA256SUMS && cat SHA256SUMS
