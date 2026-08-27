@@ -181,7 +181,7 @@ fi
 # with free ports -- like the one v1.0.1 was tested on -- never reaches it.
 out="$(printf 'y\n' | run_case 'check_ports' SS_OUT=1)"
 rc=$?
-if [[ $rc -eq 0 && "$out" == *"in use already"* ]]; then
+if [[ $rc -eq 0 && "$out" == *"in use by something else"* ]]; then
   ok "a busy port is reported as busy"
 else
   bad "busy port not reported (rc=$rc) -- silently seen as free"; printf '%s\n' "$out" | sed 's/^/        /' >&2
@@ -193,6 +193,70 @@ out="$(printf 'n\n' | run_case 'check_ports' SS_OUT=1)"
   || bad "answering no did not stop the install"
 
 echo
+echo "==> check_ports recognises its own service"
+
+cat > "$STUB/ss" <<'EOF'
+#!/usr/bin/env bash
+[[ -z "${SS_OUT:-}" ]] && exit 0
+if [[ -n "${SS_OURS:-}" ]]; then
+  echo 'LISTEN 0 4096 0.0.0.0:53 0.0.0.0:* users:(("privatedns-reso",pid=9,fd=7))'
+else
+  for _ in $(seq 1 400); do
+    printf 'LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=4,fd=6))\n'
+  done
+fi
+EOF
+chmod +x "$STUB/ss"
+
+# Since v1.0.6 the resolver runs without a certificate, so on every re-install
+# it is the thing holding 53, 443 and 853. Warning about nginx there, and
+# stopping to prompt, is the installer not recognising its own service.
+out="$(run_case 'check_ports' SS_OUT=1 SS_OURS=1)"
+rc=$?
+if [[ $rc -eq 0 && "$out" == *"held by PrivateDNS"* && "$out" != *"nginx"* ]]; then
+  ok "ports held by PrivateDNS are reported as an upgrade, not a conflict"
+else
+  bad "own service treated as a foreign conflict (rc=$rc): $out"
+fi
+
+out="$(printf 'y\n' | run_case 'check_ports' SS_OUT=1)"
+[[ "$out" == *"in use by something else"* ]] \
+  && ok "a foreign listener is still flagged" \
+  || bad "foreign listener not flagged: $out"
+
+echo "==> fetch retries"
+
+# A single connect to github.com can hang and fail on some networks, then
+# succeed immediately after. Failing the install on the first timeout makes the
+# operator do the retrying by hand.
+cat > "$STUB/curl" <<'EOF'
+#!/usr/bin/env bash
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+n=0
+[[ -f "${FLAKY_MARK:-/nonexistent}" ]] && n=1
+if [[ $n -eq 0 && -n "${FLAKY_MARK:-}" ]]; then
+  touch "$FLAKY_MARK"; echo "curl: (28) Failed to connect" >&2; exit 28
+fi
+body="$(cat "${CURL_BODY:?}")"
+if [[ -n "$out" ]]; then printf '%s\n' "$body" > "$out"; else printf '%s\n' "$body"; fi
+EOF
+chmod +x "$STUB/curl"
+
+mark="$(mktemp -u)"
+out="$(run_case 'resolve_version; echo "TAG=$RELEASE_TAG"' \
+        CURL_BODY="$FIXTURE/release.json" FLAKY_MARK="$mark")"
+if [[ "$out" == *"TAG=v1.0.1"* ]]; then
+  ok "a failed first attempt is retried, not fatal"
+else
+  bad "no retry after a transient failure: $out"
+fi
+# The retry notice must not be captured as part of the JSON.
+[[ "$out" != *"TAG=  ! attempt"* && "$out" != *'TAG=v1.0.1 '* ]] \
+  && ok "the retry notice goes to stderr, not into the response body" \
+  || bad "retry notice polluted the captured response"
+rm -f "$mark"
+
 echo "==> write_configs"
 
 CFGDIR="$(mktemp -d)"; DATADIR="$(mktemp -d)"

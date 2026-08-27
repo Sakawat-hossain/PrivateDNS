@@ -103,7 +103,7 @@ check_os() {
 check_ports() {
   step "Checking ports"
 
-  local busy=()
+  local busy=() ours=()
   local port
   for port in 53 443 853; do
     # Capture, then test. `ss ... | grep -q .` reads naturally but grep exits at
@@ -113,18 +113,31 @@ check_ports() {
     # on, and the resolver then failed to bind. The check existed to catch
     # exactly the case it got wrong.
     local listeners
-    listeners="$(ss -Hln "sport = :${port}" 2>/dev/null || true)"
-    if [[ -n "${listeners//[[:space:]]/}" ]]; then
+    # -p names the process. Since v1.0.6 the resolver starts without a
+    # certificate, so on every re-install these three ports are held by
+    # PrivateDNS itself. Warning about nginx at that point, and prompting, is
+    # the installer failing to recognise its own service mid-upgrade.
+    listeners="$(ss -Hlnp "sport = :${port}" 2>/dev/null || true)"
+    if [[ -z "${listeners//[[:space:]]/}" ]]; then
+      continue
+    fi
+    if [[ "$listeners" == *privatedns* ]]; then
+      ours+=("$port")
+    else
       busy+=("$port")
     fi
   done
 
+  if [[ ${#ours[@]} -gt 0 ]]; then
+    ok "${ours[*]} held by PrivateDNS already — it will be restarted"
+  fi
+
   if [[ ${#busy[@]} -eq 0 ]]; then
-    ok "53, 443 and 853 are free"
+    [[ ${#ours[@]} -gt 0 ]] || ok "53, 443 and 853 are free"
     return
   fi
 
-  warn "in use already: ${busy[*]}"
+  warn "in use by something else: ${busy[*]}"
   for port in "${busy[@]}"; do
     case "$port" in
       53)
@@ -147,6 +160,32 @@ check_ports() {
 # Install
 # ---------------------------------------------------------------------------
 
+# fetch retries.
+#
+# Reaching github.com from some networks is unreliable in a way that has
+# nothing to do with this software -- a single connect can hang for two
+# minutes and then fail, and the next one succeeds. Failing the whole install
+# on the first timeout makes the operator do the retrying by hand.
+#
+# Three attempts, with a connect timeout short enough that a dead route is not
+# waited on for minutes.
+fetch() {
+  local url="$1" out="${2:-}" attempt
+  for attempt in 1 2 3; do
+    if [[ -n "$out" ]]; then
+      curl -fsSL --connect-timeout 20 --max-time 300 "$url" -o "$out" && return 0
+    else
+      curl -fsSL --connect-timeout 20 --max-time 300 "$url" && return 0
+    fi
+    [[ $attempt -lt 3 ]] || break
+    # To stderr: fetch is used inside $( ), so anything on stdout is
+    # captured as part of the response body.
+    warn "attempt ${attempt} failed, retrying" >&2
+    sleep $(( attempt * 3 ))
+  done
+  return 1
+}
+
 # Ask GitHub for the newest published tag.
 #
 # Deliberately not `curl ... | grep -m1 ... | cut`. grep -m1 exits at the first
@@ -157,7 +196,7 @@ check_ports() {
 # anything to break.
 latest_release_tag() {
   local json tag
-  json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
+  json="$(fetch "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
 
   tag="${json#*\"tag_name\"}"
   [[ "$tag" != "$json" ]] || return 1   # key absent
@@ -171,9 +210,18 @@ latest_release_tag() {
 
 resolve_version() {
   if [[ "$RELEASE_TAG" == "latest" ]]; then
-    RELEASE_TAG="$(latest_release_tag)" \
-      || fail "could not determine the latest release"
-    [[ -n "$RELEASE_TAG" ]] || fail "could not determine the latest release"
+    # Only this step needs api.github.com. Everything after it uses
+    # github.com and raw.githubusercontent.com, so a network that cannot reach
+    # the API can still complete an install if it is told which tag to fetch.
+    RELEASE_TAG="$(latest_release_tag)" || RELEASE_TAG=""
+    if [[ -z "$RELEASE_TAG" ]]; then
+      printf '\n' >&2
+      printf '  Could not reach api.github.com to ask which release is newest.\n' >&2
+      printf '  Nothing else here needs that host. Name the version instead:\n\n' >&2
+      printf '      VERSION=v1.0.7 sudo bash install.sh\n\n' >&2
+      printf '  Releases: https://github.com/%s/releases\n' "$REPO" >&2
+      fail "no version to install"
+    fi
   fi
 
   # A tag is a path segment in every download URL below. Anything with a space
@@ -195,13 +243,13 @@ download_and_verify() {
 
   local base="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 
-  curl -fsSL "${base}/SHA256SUMS" -o "${WORK}/SHA256SUMS" \
+  fetch "${base}/SHA256SUMS" "${WORK}/SHA256SUMS" \
     || fail "could not fetch SHA256SUMS for ${RELEASE_TAG}"
 
   local comp binary
   for comp in $COMPONENTS; do
     binary="privatedns-${comp}-linux-${ARCH}"
-    curl -fsSL "${base}/${binary}" -o "${WORK}/${binary}" \
+    fetch "${base}/${binary}" "${WORK}/${binary}" \
       || fail "could not download ${binary}"
   done
   # Verifying every binary against the published checksums. A download that
@@ -593,7 +641,7 @@ install_cli() {
       continue
     fi
 
-    if curl -fsSL "${base}/${src}" -o "${WORK}/${name}" &&
+    if fetch "${base}/${src}" "${WORK}/${name}" &&
        [[ -s "${WORK}/${name}" ]] &&
        [[ "$(head -1 "${WORK}/${name}")" == "#!"* ]]; then
       install -m 0755 "${WORK}/${name}" "${PREFIX}/${name}"
