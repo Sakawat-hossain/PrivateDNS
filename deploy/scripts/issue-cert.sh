@@ -29,9 +29,7 @@ if ! command -v lego >/dev/null 2>&1; then
   cat >&2 <<'MSG'
 lego is not installed. It is the ACME client this script drives.
 
-  Debian/Ubuntu:  apt-get install -y lego
-
-  Or the upstream binary, if your distribution has no package:
+Install the upstream binary -- it carries every DNS provider:
 
     v=$(curl -fsSL https://api.github.com/repos/go-acme/lego/releases/latest \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
@@ -39,7 +37,37 @@ lego is not installed. It is the ACME client this script drives.
       | tar -xz -C /tmp lego
     install -m 0755 /tmp/lego /usr/local/bin/lego
 
+Not `apt-get install lego`. Debian's package ships a reduced provider set
+without Cloudflare, and you only find out after ACME has registered an account.
+
 Then run this script again.
+MSG
+  exit 1
+fi
+
+# Having lego is not enough: it must have been built with the Cloudflare DNS
+# provider. Debian's package is not -- `apt-get install lego` on bookworm gives
+# 4.9.1 without it, and the failure arrives only after ACME has registered an
+# account and written a key:
+#
+#     unrecognized DNS provider: cloudflare
+#
+# Check up front, where the message can name the cause and the fix.
+if ! lego dnshelp -c cloudflare >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+This lego was built without the Cloudflare DNS provider.
+
+Debian's package is the usual reason: it ships a reduced provider set.
+Replace it with the upstream binary, which carries all of them:
+
+    apt-get remove -y lego
+    v=$(curl -fsSL https://api.github.com/repos/go-acme/lego/releases/latest \
+        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+    curl -fsSL "https://github.com/go-acme/lego/releases/download/${v}/lego_${v}_linux_amd64.tar.gz" \
+      | tar -xz -C /tmp lego
+    install -m 0755 /tmp/lego /usr/local/bin/lego
+
+Confirm with:  lego dnshelp -c cloudflare
 MSG
   exit 1
 fi

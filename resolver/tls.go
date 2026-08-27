@@ -2,7 +2,6 @@ package resolver
 
 import (
 	"crypto/tls"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -20,6 +19,16 @@ const certReloadInterval = time.Minute
 //
 // Certificates are re-read from disk rather than pinned at startup, so a
 // renewal takes effect without restarting the service or dropping connections.
+//
+// A missing certificate is NOT an error here. On a fresh install there is no
+// certificate until the operator has pointed DNS at the host and run the ACME
+// client, and refusing to start until then took the whole service down --
+// including the admin endpoint needed to check on it, and the plain listener.
+// The process would exit, systemd would restart it, and the log filled with
+// hundreds of identical failures while the operator worked through the setup
+// steps. Instead the listeners come up and handshakes fail until a certificate
+// appears, at which point they start succeeding on their own within
+// certReloadInterval. HaveCert reports which state you are in.
 func LoadTLS(cfg Config) (*tls.Config, error) {
 	var (
 		mu     sync.RWMutex
@@ -54,10 +63,9 @@ func LoadTLS(cfg Config) (*tls.Config, error) {
 		return &crt, nil
 	}
 
-	if _, err := load(); err != nil {
-		return nil, fmt.Errorf("load %s / %s: %w", cfg.CertFile, cfg.KeyFile, err)
-	}
-
+	// Probe once so a genuinely broken pair is visible in the log at startup
+	// rather than only when the first client connects. Not fatal: see above.
+	_, _ = load()
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1", "dot"},
@@ -65,4 +73,17 @@ func LoadTLS(cfg Config) (*tls.Config, error) {
 			return load()
 		},
 	}, nil
+}
+
+// HaveCert reports whether a usable certificate and key are on disk right now.
+//
+// Used to decide what to log at startup and what readiness should say, so the
+// difference between "waiting for a certificate" and "serving" is visible
+// without reading a handshake failure.
+func HaveCert(cfg Config) bool {
+	if cfg.CertFile == "" || cfg.KeyFile == "" {
+		return false
+	}
+	_, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	return err == nil
 }

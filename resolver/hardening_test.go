@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 	"os"
 	"path/filepath"
@@ -691,5 +692,64 @@ func TestBlocklistSkipsWildcardEntries(t *testing.T) {
 	}
 	if !b.Blocked("real.example.org") {
 		t.Error("the one plain domain should be blocked")
+	}
+}
+
+// A fresh install has no certificate. Refusing to start until one exists took
+// down the admin endpoint too -- the very thing needed to see what was wrong --
+// and systemd restarted the process every three seconds while the operator
+// worked through setup. One real install reached restart 308.
+func TestStartsWithoutACertificate(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.BaseDomain = "dns.example.com"
+	cfg.CertFile = filepath.Join(dir, "absent-fullchain.pem")
+	cfg.KeyFile = filepath.Join(dir, "absent-privkey.pem")
+	cfg.ListenDoT = ":8853"
+	cfg.ListenDoH = ":8443"
+
+	if HaveCert(cfg) {
+		t.Fatal("HaveCert reports a certificate that is not there")
+	}
+
+	tlsCfg, err := LoadTLS(cfg)
+	if err != nil {
+		t.Fatalf("LoadTLS refused to build a config without a certificate: %v", err)
+	}
+	if tlsCfg == nil || tlsCfg.GetCertificate == nil {
+		t.Fatal("LoadTLS returned an unusable config")
+	}
+
+	// Handshakes must fail while there is no certificate -- serving one that
+	// does not exist is not the alternative being asked for here.
+	if _, err := tlsCfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
+		t.Error("GetCertificate succeeded with no certificate on disk")
+	}
+}
+
+// And once the certificate appears it must be picked up without a restart,
+// which is the whole reason GetCertificate re-reads from disk.
+func TestPicksUpACertificateWrittenAfterStartup(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.CertFile = filepath.Join(dir, "fullchain.pem")
+	cfg.KeyFile = filepath.Join(dir, "privkey.pem")
+	cfg.ListenDoT = ":8853"
+
+	tlsCfg, err := LoadTLS(cfg)
+	if err != nil {
+		t.Fatalf("LoadTLS: %v", err)
+	}
+	if _, err := tlsCfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
+		t.Fatal("a certificate was served before one existed")
+	}
+
+	writeTestCert(t, cfg.CertFile, cfg.KeyFile)
+
+	if !HaveCert(cfg) {
+		t.Fatal("HaveCert does not see the certificate just written")
+	}
+	if _, err := tlsCfg.GetCertificate(&tls.ClientHelloInfo{}); err != nil {
+		t.Errorf("certificate written after startup was not picked up: %v", err)
 	}
 }

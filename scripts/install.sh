@@ -462,7 +462,17 @@ health_check() {
 }
 
 next_steps() {
-  local domain_hint="dns.example.com"
+  # Read the domain back rather than printing a placeholder. On a re-run the
+  # operator has already set it, and telling them to replace dns.example.com
+  # when the file already names a real domain is noise at best.
+  local domain_hint configured
+  configured="$(sed -n 's/^base_domain:[[:space:]]*//p' "${CONFIG_DIR}/config.yaml" 2>/dev/null)" || true
+  configured="${configured%%$'\n'*}"
+  configured="${configured//\"/}"
+  domain_hint="${configured:-dns.example.com}"
+
+  local domain_set=0
+  [[ -n "$configured" && "$configured" != "dns.example.com" ]] && domain_set=1
 
   if [[ "${RESOLVER_UP:-0}" -eq 1 ]]; then
     cat <<EOF
@@ -487,13 +497,28 @@ usual cause -- then: systemctl restart privatedns-resolver
 EOF
   fi
 
-  cat <<EOF
+  if [[ $domain_set -eq 1 ]]; then
+    cat <<EOF
+
+${BOLD}1. Set your domain${OFF}  — already ${GREEN}done${OFF}: ${domain_hint}
+
+   Change it with:
+     sed -i 's/${domain_hint}/your.new.domain/' ${CONFIG_DIR}/*.yaml
+EOF
+  else
+    cat <<EOF
 
 ${BOLD}1. Set your domain${OFF}
 
-   Edit ${CONFIG_DIR}/config.yaml and replace ${domain_hint}
-   with the name you will actually use, then do the same in the other
-   .yaml files in that directory.
+   One command, replacing dns.example.net with the name you will use:
+
+     sed -i 's/dns\\.example\\.com/dns.example.net/' ${CONFIG_DIR}/*.yaml
+
+   That covers config.yaml and the three service configs together.
+EOF
+  fi
+
+  cat <<EOF
 
 ${BOLD}2. Point DNS at this host${OFF}
 
@@ -513,7 +538,7 @@ ${BOLD}3. Get a wildcard certificate${OFF}
 
      printf 'CF_DNS_API_TOKEN=your_token\\n' > ${CONFIG_DIR}/cloudflare.env
      chmod 600 ${CONFIG_DIR}/cloudflare.env
-     ACME_EMAIL=you@example.com BASE_DOMAIN=your.domain \\
+     ACME_EMAIL=you@example.com BASE_DOMAIN=${domain_hint} \\
        ${PREFIX}/privatedns-issue-cert run
 
    Then: systemctl restart privatedns-resolver

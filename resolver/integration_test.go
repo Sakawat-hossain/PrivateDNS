@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"io"
 	"math/big"
 	"net"
@@ -257,5 +258,27 @@ func TestDoTRevocationClosesAccess(t *testing.T) {
 	}
 	if reply.Rcode != dns.RcodeRefused {
 		t.Fatalf("rcode = %s, want REFUSED after revocation", dns.RcodeToString[reply.Rcode])
+	}
+}
+
+// writeTestCert writes a wildcard certificate and its key as PEM, the way the
+// ACME client leaves them on disk.
+func writeTestCert(t *testing.T, certPath, keyPath string) {
+	t.Helper()
+
+	crt := selfSignedWildcard(t)
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: crt.Certificate[0]})
+	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	der, err := x509.MarshalECPrivateKey(crt.PrivateKey.(*ecdsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

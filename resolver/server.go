@@ -124,6 +124,14 @@ func (s *Server) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("tls: %w", err)
 		}
+		// A fresh install has no certificate yet. Serve everything else and
+		// say so plainly, rather than exiting and being restarted forever.
+		if !HaveCert(s.cfg) {
+			s.log.Warn("no certificate yet: DoT and DoH will refuse handshakes until one is installed",
+				"cert_file", s.cfg.CertFile,
+				"key_file", s.cfg.KeyFile,
+				"next", "run privatedns-issue-cert, then nothing else -- it is picked up within a minute")
+		}
 	}
 
 	res := NewResolver(s.cfg, s.store, s.block, s.cache, s.m).
