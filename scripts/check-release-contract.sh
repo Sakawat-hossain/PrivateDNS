@@ -225,6 +225,26 @@ for path in $called; do
   fi
 done
 
+
+printf '\n'
+note "Fatal errors are logged as errors"
+
+# slog.SetDefault routes the standard log package through slog at INFO level,
+# so every log.Fatalf after it prints as level=INFO. An operator ran
+# -create-admin, saw INFO, assumed the account existed, and could not sign in.
+for src in "${ROOT}"/cmd/*/main.go; do
+  set_line="$(grep -n 'slog.SetDefault' "$src" | cut -d: -f1 | head -1)"
+  [[ -n "$set_line" ]] || continue
+
+  bad_calls="$(awk -v s="$set_line" 'NR > s && /log\.Fatal/ { print NR ": " $0 }' "$src")"
+  if [[ -n "$bad_calls" ]]; then
+    bad "$(basename "$(dirname "$src")") uses log.Fatal after slog.SetDefault; it will print as INFO"
+    printf '%s\n' "$bad_calls" | sed 's/^/        /' >&2
+  else
+    good "$(basename "$(dirname "$src")") reports fatal errors at ERROR level"
+  fi
+done
+
 if [[ $fail -eq 0 ]]; then
   printf '  Release contract holds.\n\n'
 else

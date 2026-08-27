@@ -45,7 +45,8 @@ func main() {
 
 	srv, err := admin.New(cfg, logger)
 	if err != nil {
-		log.Fatalf("start: %v", err)
+		logger.Error("start", "err", err)
+		os.Exit(1)
 	}
 	defer srv.Close()
 
@@ -53,7 +54,8 @@ func main() {
 	defer stop()
 
 	if err := srv.Serve(ctx); err != nil {
-		log.Fatalf("serve: %v", err)
+		logger.Error("serve", "err", err)
+		os.Exit(1)
 	}
 	logger.Info("shutdown complete")
 }
