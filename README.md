@@ -84,9 +84,42 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | iOS configuration profile generator | working |
 | DNS-check diagnostic | working |
 | Operator dashboard with reseller isolation | working |
-| Installer, Docker, packages | planned |
+| Consistent backup and restore | working |
+| Installer, Docker, Debian packaging | written, see caveats |
 
-## Quick start
+## Install
+
+```bash
+curl -fsSLO https://github.com/Sakawat-hossain/PrivateDNS/releases/latest/download/install.sh
+curl -fsSLO https://github.com/Sakawat-hossain/PrivateDNS/releases/latest/download/install.sh.sha256
+sha256sum -c install.sh.sha256
+sudo bash install.sh
+```
+
+Or with Docker:
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
+
+Full detail, including the three things that remain after installing, is in
+[docs/installation.md](docs/installation.md).
+
+> **Not `curl | sudo bash`.** Piping a URL into a root shell hands root to
+> whatever the server returns, with no chance to read it first. The two extra
+> lines above are the whole difference.
+
+### Managing it
+
+```bash
+private-dns status      # what is running, and whether it is healthy
+private-dns update      # upgrade, with automatic rollback on failure
+private-dns backup      # verified snapshot
+private-dns restore f   # restore a database backup
+```
+
+## Build from source
 
 Requires Go 1.24+. Nothing else — the SQLite driver is pure Go.
 
@@ -400,6 +433,25 @@ The integration tests stand up a real TLS listener with a self-signed wildcard
 certificate and perform genuine DoT exchanges, asserting on filtering,
 overrides, refusal of unknown tenants, and revocation.
 
+## Backups
+
+```bash
+private-dns backup
+privatedns-resolver -verify-backup /var/lib/private-dns/backups/manual-.../policy.db
+```
+
+Backups go through SQLite rather than copying the file. In WAL mode the
+committed state is split between the main database and the write-ahead log, so
+`cp policy.db backup.db` captures the first without the second and produces a
+backup that restores to a torn database — silently, and only discovered when it
+is needed.
+
+Every backup is verified the moment it is taken. A backup nobody has opened is
+an assumption.
+
+`private-dns update` takes one automatically before it changes anything, and
+restores the previous binaries if the new version fails its health check.
+
 ## Roadmap
 
 | Stage | Scope |
@@ -408,7 +460,7 @@ overrides, refusal of unknown tenants, and revocation.
 | ~~2~~ | ~~Backend API — authentication, RBAC, audit log~~ — done |
 | ~~3~~ | ~~Customer portal — IP registration, iOS profiles, diagnostics~~ — done |
 | ~~4~~ | ~~Operator dashboard — customers, tenants, routing, triage, audit~~ — done |
-| 5 | Deployment — Docker, Debian packages, installer |
+| ~~5~~ | ~~Deployment — installer, Docker, Debian packaging, backup and restore~~ — done |
 | 6 | CI/CD, signed releases, security review |
 
 ## Contributing
