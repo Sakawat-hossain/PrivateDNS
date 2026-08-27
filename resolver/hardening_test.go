@@ -626,3 +626,70 @@ func TestRedactNameKeepsOnlyTheParentDomain(t *testing.T) {
 		}
 	}
 }
+
+// A hosts file opens with the loopback preamble, and the parser reads
+// "127.0.0.1 localhost" as an instruction to block localhost. StevenBlack's
+// list -- one of the feeds fetch-blocklists.sh installs -- starts with exactly
+// those lines, so this is not hypothetical.
+func TestBlocklistIgnoresTheLoopbackPreamble(t *testing.T) {
+	dir := t.TempDir()
+	body := `# Title: a hosts-format feed
+127.0.0.1 localhost
+127.0.0.1 localhost.localdomain
+127.0.0.1 local
+255.255.255.255 broadcasthost
+::1 ip6-localhost
+::1 ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+0.0.0.0 ads.example.com
+0.0.0.0 tracker.example.net
+`
+	if err := os.WriteFile(filepath.Join(dir, "feed.txt"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBlocklist(dir)
+	if _, err := b.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for _, name := range []string{
+		"localhost", "localhost.localdomain", "local",
+		"broadcasthost", "ip6-localhost", "ip6-loopback",
+		"ip6-localnet", "ip6-mcastprefix",
+	} {
+		if b.Blocked(name) {
+			t.Errorf("%q is blocked; a feed's loopback preamble must never become a rule", name)
+		}
+	}
+
+	for _, name := range []string{"ads.example.com", "tracker.example.net"} {
+		if !b.Blocked(name) {
+			t.Errorf("%q is not blocked; real entries must still load", name)
+		}
+	}
+}
+
+// The parser drops any line carrying a "*". Hagezi publishes a wildcard and a
+// plain-domain edition under near-identical names, and choosing the wildcard
+// one yields a feed that loads without error and blocks nothing at all.
+func TestBlocklistSkipsWildcardEntries(t *testing.T) {
+	dir := t.TempDir()
+	body := "*.ads.example.com\n*.tracker.example.net\nreal.example.org\n"
+	if err := os.WriteFile(filepath.Join(dir, "feed.txt"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewBlocklist(dir)
+	n, err := b.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("loaded %d entries, want 1 -- wildcard lines must be skipped", n)
+	}
+	if !b.Blocked("real.example.org") {
+		t.Error("the one plain domain should be blocked")
+	}
+}

@@ -83,12 +83,12 @@ install -m 0644 "$HERE"/configs/*  "$CONFIG/"
 
 # Only on a first install. Re-running to update a build must not reset a token
 # or a domain someone has already configured.
-if [[ ! -f "$CONFIG/config.json" ]]; then
+if [[ ! -f "$CONFIG/config.yaml" ]]; then
   TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   sed -e "s|GENERATE_WITH_openssl_rand_hex_32|$TOKEN|" \
-      "$CONFIG/config.example.json" > "$CONFIG/config.json"
-  chmod 0640 "$CONFIG/config.json"
-  chown root:"$USER" "$CONFIG/config.json"
+      "$CONFIG/config.example.yaml" > "$CONFIG/config.yaml"
+  chmod 0640 "$CONFIG/config.yaml"
+  chown root:"$USER" "$CONFIG/config.yaml"
   echo ""
   echo "Resolver admin token: $TOKEN"
   echo ""
@@ -96,7 +96,7 @@ fi
 
 systemctl daemon-reload
 echo "Installed. Next:"
-echo "  1. Set base_domain in $CONFIG/config.json"
+echo "  1. Set base_domain in $CONFIG/config.yaml"
 echo "  2. Issue a certificate: privatedns-issue-cert run"
 echo "  3. systemctl enable --now privatedns-resolver"
 echo "  4. private-dns status"

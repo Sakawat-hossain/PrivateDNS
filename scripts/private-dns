@@ -103,6 +103,18 @@ cmd_logs() {
   exec journalctl -u "privatedns-${comp}" -f -n 50
 }
 
+# The resolver reads either format -- the file extension picks the parser.
+# Prefer config.yaml, which is what the installer writes and what the systemd
+# unit names, but fall back to config.json so a host installed before v1.0.3
+# keeps working without being touched.
+resolver_config() {
+  if [[ -f "${CONFIG_DIR}/config.json" && ! -f "${CONFIG_DIR}/config.yaml" ]]; then
+    printf '%s' "${CONFIG_DIR}/config.json"
+  else
+    printf '%s' "${CONFIG_DIR}/config.yaml"
+  fi
+}
+
 cmd_backup() {
   require_root
   local stamp dest
@@ -111,7 +123,7 @@ cmd_backup() {
   install -d -m 0700 "$dest"
 
   printf '\n  Backing up...\n'
-  "${PREFIX}/privatedns-resolver" -config "${CONFIG_DIR}/config.json" -backup "${dest}/policy.db" \
+  "${PREFIX}/privatedns-resolver" -config "$(resolver_config)" -backup "${dest}/policy.db" \
     || { printf '  %s✗%s the backup failed\n' "$RED" "$OFF" >&2; exit 1; }
 
   tar -czf "${dest}/config.tar.gz" -C "$(dirname "$CONFIG_DIR")" "$(basename "$CONFIG_DIR")" 2>/dev/null || true
@@ -152,8 +164,11 @@ cmd_restore() {
   "${PREFIX}/privatedns-resolver" -verify-backup "$src" \
     || { printf '  %s✗%s that file is not a usable database; nothing changed\n' "$RED" "$OFF" >&2; exit 1; }
 
-  local db
-  db="$(grep -o '"db_path"[^,]*' "${CONFIG_DIR}/config.json" 2>/dev/null | cut -d'"' -f4)"
+  local db cfg
+  cfg="$(resolver_config)"
+  # Works for both formats: `db_path: /x` and `"db_path": "/x"`.
+  db="$(sed -n 's/^[[:space:]]*"\?db_path"\?[[:space:]]*:[[:space:]]*"\?\([^",[:space:]]*\).*/\1/p' "$cfg" 2>/dev/null)"
+  db="${db%%$'\n'*}"
   db="${db:-${DATA_DIR}/policy.db}"
 
   printf '\n  This replaces %s with %s.\n' "$db" "$src"

@@ -279,35 +279,60 @@ write_configs() {
 
   local generated=0
 
-  if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
+  # A stale config.json from v1.0.x. The resolver reads either format -- the
+  # extension picks the parser -- but the unit file names config.yaml, so a
+  # leftover .json is dead weight that looks live. Say so rather than leaving
+  # two configs on disk disagreeing about which one matters.
+  if [[ -f "${CONFIG_DIR}/config.json" && ! -f "${CONFIG_DIR}/config.yaml" ]]; then
+    mv "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/config.json.unused"
+    warn "found config.json from an older install; it is not read any more"
+    warn "  kept as config.json.unused -- copy anything you customised into config.yaml"
+  fi
+
+  if [[ ! -f "${CONFIG_DIR}/config.yaml" ]]; then
     ADMIN_TOKEN="$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    cat > "${CONFIG_DIR}/config.json" <<EOF
-{
-  "base_domain": "dns.example.com",
-  "cert_file": "${CONFIG_DIR}/certs/fullchain.pem",
-  "key_file": "${CONFIG_DIR}/certs/privkey.pem",
-  "listen_dot": ":853",
-  "listen_doh": ":443",
-  "listen_plain": ":53",
-  "listen_admin": "127.0.0.1:8053",
-  "upstreams": ["1.1.1.1:53", "1.0.0.1:53"],
-  "db_path": "${DATA_DIR}/policy.db",
-  "blocklist_dir": "${DATA_DIR}/blocklists",
-  "admin_tokens": ["${ADMIN_TOKEN}"],
-  "open_plain": false,
-  "rate_limit_qps": 50,
-  "rate_limit_burst": 200,
-  "strip_ecs": true,
-  "log_level": "info"
-}
+    cat > "${CONFIG_DIR}/config.yaml" <<EOF
+# PrivateDNS resolver configuration, written by the installer.
+#
+# Every key can also be set from the environment as PRIVATEDNS_<KEY>, and the
+# environment wins over this file.
+
+# The name customers point their device at. Change this before going live.
+base_domain: dns.example.com
+
+cert_file: ${CONFIG_DIR}/certs/fullchain.pem
+key_file: ${CONFIG_DIR}/certs/privkey.pem
+
+listen_dot: ":853"
+listen_doh: ":443"
+listen_plain: ":53"
+listen_admin: "127.0.0.1:8053"
+
+upstreams:
+  - "1.1.1.1:53"
+  - "1.0.0.1:53"
+
+db_path: ${DATA_DIR}/policy.db
+blocklist_dir: ${DATA_DIR}/blocklists
+
+# Anyone holding this token can provision tenants. Keep the file mode 0640.
+admin_tokens:
+  - "${ADMIN_TOKEN}"
+
+# Plain :53 identifies no tenant, so it cannot be filtered per customer.
+open_plain: false
+
+rate_limit_qps: 50
+rate_limit_burst: 200
+strip_ecs: true
+log_level: info
 EOF
-    # The file carries an admin token.
-    chmod 0640 "${CONFIG_DIR}/config.json"
-    chown root:"$SERVICE_USER" "${CONFIG_DIR}/config.json"
+    chmod 0640 "${CONFIG_DIR}/config.yaml"
+    chown root:"$SERVICE_USER" "${CONFIG_DIR}/config.yaml"
     generated=1
-    ok "config.json created"
+    ok "config.yaml created"
   else
-    ok "config.json exists, left alone"
+    ok "config.yaml exists, left alone"
   fi
 
   local comp
@@ -395,8 +420,10 @@ start_services() {
   sleep 2
 
   if systemctl is-active --quiet privatedns-resolver; then
+    RESOLVER_UP=1
     ok "privatedns-resolver running"
   else
+    RESOLVER_UP=0
     warn "privatedns-resolver did not start"
     printf '\n'
     journalctl -u privatedns-resolver -n 15 --no-pager 2>/dev/null | sed 's/^/      /'
@@ -406,6 +433,11 @@ start_services() {
 
 health_check() {
   step "Checking health"
+
+  if [[ "${RESOLVER_UP:-0}" -ne 1 ]]; then
+    warn "skipped -- the resolver is not running"
+    return
+  fi
 
   local i
   for i in $(seq 1 10); do
@@ -429,16 +461,34 @@ health_check() {
 next_steps() {
   local domain_hint="dns.example.com"
 
-  cat <<EOF
+  if [[ "${RESOLVER_UP:-0}" -eq 1 ]]; then
+    cat <<EOF
 
 ${BOLD}Installed.${OFF}
 
-PrivateDNS is running, but it is not serving customers yet. Three things
+The resolver is running, but it is not serving customers yet. Three things
 remain, in this order:
+EOF
+  else
+    cat <<EOF
+
+${BOLD}Installed, but the resolver is not running.${OFF}
+
+The files are all in place; something stopped the service from starting. The
+log is printed above, and in full at:
+
+    journalctl -u privatedns-resolver -n 50
+
+Work through the steps below anyway -- a missing domain or certificate is the
+usual cause -- then: systemctl restart privatedns-resolver
+EOF
+  fi
+
+  cat <<EOF
 
 ${BOLD}1. Set your domain${OFF}
 
-   Edit ${CONFIG_DIR}/config.json and replace ${domain_hint}
+   Edit ${CONFIG_DIR}/config.yaml and replace ${domain_hint}
    with the name you will actually use, then do the same in the other
    .yaml files in that directory.
 
@@ -474,7 +524,7 @@ EOF
 
   if [[ "${NEW_INSTALL:-0}" == "1" && -n "${ADMIN_TOKEN:-}" ]]; then
     cat <<EOF
-${BOLD}Your resolver admin token${OFF} (also in ${CONFIG_DIR}/config.json):
+${BOLD}Your resolver admin token${OFF} (also in ${CONFIG_DIR}/config.yaml):
 
    ${ADMIN_TOKEN}
 

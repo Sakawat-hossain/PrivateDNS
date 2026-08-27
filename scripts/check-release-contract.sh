@@ -126,6 +126,81 @@ else
 fi
 
 printf '\n'
+# ---------------------------------------------------------------------------
+# Every unit must start a binary that exists, with a config the installer writes
+# ---------------------------------------------------------------------------
+#
+# v1.0.2 installed cleanly and then failed to start: the resolver unit passed
+# -config /etc/private-dns/config.yaml while the installer wrote config.json.
+# Nothing in the build could notice, because a systemd unit is just a text file
+# until systemd reads it on the target machine.
+
+printf '\n'
+note "Units against the installer"
+
+for unit in "${ROOT}"/deploy/systemd/privatedns-*.service; do
+  unit_name="$(basename "$unit")"
+  exec_line="$(grep -m1 '^ExecStart=' "$unit" | sed 's/^ExecStart=//')" || true
+
+  binary="${exec_line%% *}"
+  bin_base="$(basename "$binary")"
+
+  if [[ -d "${ROOT}/cmd/${bin_base}" ]]; then
+    good "${unit_name} starts ${bin_base}, which is built"
+  else
+    bad "${unit_name} starts ${bin_base}, which has no cmd/ directory"
+  fi
+
+  # Pull the -config argument out of ExecStart, if there is one.
+  cfg=""
+  read -ra parts <<< "$exec_line"
+  for i in "${!parts[@]}"; do
+    if [[ "${parts[$i]}" == "-config" || "${parts[$i]}" == "--config" ]]; then
+      cfg="${parts[$((i + 1))]:-}"
+      break
+    fi
+  done
+
+  [[ -n "$cfg" ]] || continue
+  cfg_base="$(basename "$cfg")"
+
+  # Written literally by name, or by the backend/portal/admin loop.
+  cfg_ok=0
+  if grep -qE "cat > .*CONFIG_DIR.*/${cfg_base}" "$INSTALL"; then
+    cfg_ok=1
+  elif [[ "$cfg_base" =~ ^(backend|portal|admin)\.yaml$ ]] &&
+       grep -qE 'CONFIG_DIR\}/\$\{comp\}\.yaml' "$INSTALL"; then
+    cfg_ok=1
+  fi
+
+  if [[ $cfg_ok -eq 1 ]]; then
+    good "${unit_name} reads ${cfg_base}, which the installer writes"
+  else
+    bad "${unit_name} reads ${cfg_base}, which the installer never creates"
+  fi
+done
+
+
+printf '\n'
+note "Referenced example configs exist"
+
+# config.example.json was deleted in v1.0.3 because having two examples in two
+# formats is what let the unit and the installer disagree. Two scripts still
+# named it. A reference to a file that is not in the tree is a packaging
+# failure that only shows up on the target machine.
+for src in "${ROOT}/deploy/debian/postinst" "${ROOT}/scripts/build-for-vps.sh" \
+           "${ROOT}/Dockerfile" "${ROOT}/deploy/debian/build-deb.sh"; do
+  [[ -f "$src" ]] || continue
+  while read -r ref; do
+    [[ -n "$ref" ]] || continue
+    if [[ -f "${ROOT}/configs/${ref}" ]]; then
+      good "$(basename "$src") uses ${ref}, which exists"
+    else
+      bad "$(basename "$src") references configs/${ref}, which is not in the tree"
+    fi
+  done < <(grep -oE '[a-z]+\.example\.(yaml|json)' "$src" | sort -u)
+done
+
 if [[ $fail -eq 0 ]]; then
   printf '  Release contract holds.\n\n'
 else

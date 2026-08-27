@@ -73,7 +73,14 @@ func loadListFile(path string, set map[string]struct{}) error {
 			}
 		}
 		name := normalizeDomain(line)
-		if name == "" || strings.ContainsAny(name, "/ *") {
+		if name == "" || strings.ContainsAny(name, "/ *:") {
+			continue
+		}
+		// Every hosts file opens with the loopback preamble -- "127.0.0.1
+		// localhost", "::1 ip6-localhost" and friends. Those are declarations
+		// about the local machine, not things to block, and a resolver that
+		// blocks localhost because a feed mentioned it is broken.
+		if neverBlock[name] {
 			continue
 		}
 		set[name] = struct{}{}
@@ -110,4 +117,22 @@ func (b *Blocklist) WatchReload(every time.Duration, onReload func(int, error)) 
 			}
 		}
 	}()
+}
+
+// neverBlock are names no feed may filter, whatever it says.
+//
+// Hosts files all begin with the loopback preamble, and the parser above reads
+// "127.0.0.1 localhost" as an instruction to block localhost. They are also the
+// names most likely to break something quietly if a feed ever listed them by
+// mistake.
+var neverBlock = map[string]bool{}
+
+func init() {
+	for _, n := range []string{
+		"localhost", "localhost.localdomain", "local",
+		"broadcasthost", "ip6-localhost", "ip6-loopback",
+		"ip6-localnet", "ip6-mcastprefix", "ip6-allnodes", "ip6-allrouters",
+	} {
+		neverBlock[n] = true
+	}
 }

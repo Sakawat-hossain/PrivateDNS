@@ -18,7 +18,7 @@ services:
         VERSION: ${VERSION:-dev}
     image: ${IMAGE:-privatedns}:${VERSION:-dev}
     restart: unless-stopped
-    command: ["-config", "/etc/private-dns/config.json"]
+    command: ["-config", "/etc/private-dns/config.yaml"]
 
     ports:
       - "53:53/udp"

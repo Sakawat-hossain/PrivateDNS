@@ -57,6 +57,15 @@ exit 0
 EOF
 
 chmod +x "$STUB"/curl "$STUB"/ss "$STUB"/systemctl
+cat > "$STUB/chown" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$STUB/chmod" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$STUB"/chown "$STUB"/chmod
 
 printf '{ "tag_name": "v1.0.1", "name": "release" }\n' > "$FIXTURE/release.json"
 printf '{ "message": "Not Found" }\n'                   > "$FIXTURE/notfound.json"
@@ -158,6 +167,77 @@ out="$(printf 'n\n' | run_case 'check_ports' SS_OUT=1)"
 [[ $? -ne 0 ]] \
   && ok "declining at the busy-port prompt stops the install" \
   || bad "answering no did not stop the install"
+
+echo
+echo "==> write_configs"
+
+CFGDIR="$(mktemp -d)"; DATADIR="$(mktemp -d)"
+out="$(run_case 'write_configs' CONFIG_DIR="$CFGDIR" DATA_DIR="$DATADIR" \
+        SERVICE_USER="$(id -un)" COMPONENTS="resolver backend portal admin")"
+if [[ -f "$CFGDIR/config.yaml" ]]; then
+  ok "writes config.yaml"
+else
+  bad "no config.yaml written: $out"
+fi
+
+# The resolver unit names config.yaml. Anything else and the service starts,
+# fails to find its configuration, and exits -- which is how v1.0.2 shipped.
+unit_cfg="$(grep -m1 '^ExecStart=' deploy/systemd/privatedns-resolver.service \
+            | grep -oE '\-config [^ ]+' | awk '{print $2}')"
+if [[ -f "$unit_cfg" || -f "$CFGDIR/$(basename "$unit_cfg")" ]]; then
+  ok "the file the resolver unit names is the file the installer writes"
+else
+  bad "unit reads $(basename "$unit_cfg"); installer wrote $(ls "$CFGDIR" | tr '\n' ' ')"
+fi
+
+if grep -q 'admin_tokens' "$CFGDIR/config.yaml" 2>/dev/null &&
+   grep -qE '^\s+- "[0-9a-f]{64}"' "$CFGDIR/config.yaml"; then
+  ok "an admin token is generated into it"
+else
+  bad "no admin token in config.yaml"
+fi
+
+for c in backend portal admin; do
+  [[ -f "$CFGDIR/$c.yaml" ]] || bad "no $c.yaml written"
+done
+ok "backend, portal and admin configs written"
+
+# A v1.0.x install has config.json. It must not be left looking authoritative.
+CFGDIR2="$(mktemp -d)"
+printf '{"base_domain":"old.example.com"}\n' > "$CFGDIR2/config.json"
+out="$(run_case 'write_configs' CONFIG_DIR="$CFGDIR2" DATA_DIR="$DATADIR" \
+        SERVICE_USER="$(id -un)" COMPONENTS="resolver")"
+if [[ -f "$CFGDIR2/config.yaml" && -f "$CFGDIR2/config.json.unused" && ! -f "$CFGDIR2/config.json" ]]; then
+  ok "a stale config.json is set aside, not left to look live"
+else
+  bad "stale config.json not handled: $(ls "$CFGDIR2" | tr '\n' ' ')"
+fi
+
+# Re-running must not mint a new admin token over a working one.
+before="$(grep -oE '[0-9a-f]{64}' "$CFGDIR/config.yaml" | head -1)"
+run_case 'write_configs' CONFIG_DIR="$CFGDIR" DATA_DIR="$DATADIR" \
+  SERVICE_USER="$(id -un)" COMPONENTS="resolver" >/dev/null
+after="$(grep -oE '[0-9a-f]{64}' "$CFGDIR/config.yaml" | head -1)"
+[[ -n "$before" && "$before" == "$after" ]] \
+  && ok "re-running leaves an existing config and its token alone" \
+  || bad "re-running changed the admin token"
+
+rm -rf "$CFGDIR" "$CFGDIR2" "$DATADIR"
+
+echo "==> next_steps"
+
+out="$(run_case 'RESOLVER_UP=1; next_steps')"
+[[ "$out" == *"The resolver is running"* && "$out" != *"not running"* ]] \
+  && ok "reports success when the resolver started" \
+  || bad "wrong summary for a running resolver"
+
+# v1.0.2 announced "PrivateDNS is running" directly under a failure notice.
+out="$(run_case 'RESOLVER_UP=0; next_steps')"
+if [[ "$out" == *"not running"* && "$out" == *"journalctl"* ]]; then
+  ok "says so plainly when the resolver did not start"
+else
+  bad "claimed success after a failed start"
+fi
 
 echo
 if [[ $fail_n -ne 0 ]]; then

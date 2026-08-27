@@ -47,6 +47,18 @@ current_version() {
 
 # See the note in install.sh: `curl | grep -m1` makes curl exit 23 on a closed
 # pipe, and pipefail turns a successful fetch into a failed one.
+# The resolver reads either format -- the file extension picks the parser.
+# Prefer config.yaml, which is what the installer writes and what the systemd
+# unit names, but fall back to config.json so a host installed before v1.0.3
+# keeps working without being touched.
+resolver_config() {
+  if [[ -f "${CONFIG_DIR}/config.json" && ! -f "${CONFIG_DIR}/config.yaml" ]]; then
+    printf '%s' "${CONFIG_DIR}/config.json"
+  else
+    printf '%s' "${CONFIG_DIR}/config.yaml"
+  fi
+}
+
 latest_version() {
   local json tag
   json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
@@ -97,14 +109,14 @@ backup_everything() {
   local dest="${BACKUP_DIR}/pre-update-${STAMP}"
   install -d -m 0700 "$dest"
 
-  if [[ -f "${CONFIG_DIR}/config.json" ]]; then
+  if [[ -f "$(resolver_config)" ]]; then
     tar -czf "${dest}/config.tar.gz" -C "$(dirname "$CONFIG_DIR")" "$(basename "$CONFIG_DIR")" 2>/dev/null
     chmod 0600 "${dest}/config.tar.gz"
     ok "configuration"
   fi
 
-  if [[ -x "${PREFIX}/privatedns-resolver" && -f "${CONFIG_DIR}/config.json" ]]; then
-    if "${PREFIX}/privatedns-resolver" -config "${CONFIG_DIR}/config.json" \
+  if [[ -x "${PREFIX}/privatedns-resolver" && -f "$(resolver_config)" ]]; then
+    if "${PREFIX}/privatedns-resolver" -config "$(resolver_config)" \
          -backup "${dest}/policy.db" >/dev/null 2>&1; then
       ok "database (verified)"
     else

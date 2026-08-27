@@ -24,7 +24,7 @@ var version = "dev"
 
 func main() {
 	var (
-		configPath  = flag.String("config", "/etc/private-dns/config.json", "path to the configuration file")
+		configPath  = flag.String("config", "/etc/private-dns/config.yaml", "path to the configuration file")
 		writeSample = flag.Bool("init", false, "write a starter configuration file and exit")
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		backupTo    = flag.String("backup", "", "write a consistent snapshot of the policy database to this path and exit")

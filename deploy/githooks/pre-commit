@@ -22,7 +22,7 @@ staged="$(git diff --cached --name-only --diff-filter=ACM)"
 while read -r f; do
   case "$f" in
     .env|*/.env|*.pem|*.key|cloudflare.env|*/cloudflare.env|\
-    config.json|configs/config.json|*.db|*.sqlite|*.sqlite3)
+    config.json|config.yaml|configs/config.json|configs/config.yaml|*.db|*.sqlite|*.sqlite3)
       echo "refusing to commit $f"
       fail=1
       ;;

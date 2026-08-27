@@ -55,4 +55,4 @@ VOLUME ["/var/lib/private-dns"]
 EXPOSE 53/udp 53/tcp 443 853 8080 8081 8082
 
 ENTRYPOINT ["/usr/local/bin/privatedns-resolver"]
-CMD ["-config", "/etc/private-dns/config.json"]
+CMD ["-config", "/etc/private-dns/config.yaml"]

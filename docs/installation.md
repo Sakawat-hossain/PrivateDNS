@@ -60,7 +60,7 @@ Installation does not finish the job. Three things remain:
 
 ### 1. Set your domain
 
-Edit `base_domain` in `/etc/private-dns/config.json` and in the `.yaml` files
+Edit `base_domain` in `/etc/private-dns/config.yaml` and in the `.yaml` files
 beside it.
 
 ### 2. Point DNS at the host
