@@ -298,9 +298,9 @@ func TestUpdateIPBindsTheObservedAddress(t *testing.T) {
 	// Nominating an address must be ignored: honouring it would let a customer
 	// authorise a stranger's connection through the proxy.
 	form := url.Values{"route_id": {routeID}, "ip": {"203.0.113.99"}}
-	req := httptest.NewRequest("POST", "/ip", strings.NewReader(form.Encode()))
 	form.Set("csrf_token", alice.csrf)
-	req = httptest.NewRequest("POST", "/ip", strings.NewReader(form.Encode()))
+
+	req := httptest.NewRequest("POST", "/ip", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(alice.cookie)
 	req.RemoteAddr = "198.51.100.7:5555"

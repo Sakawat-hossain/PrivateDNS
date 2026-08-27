@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -412,8 +411,6 @@ func Chain(h http.Handler, mw ...func(http.Handler) http.Handler) http.Handler {
 	}
 	return h
 }
-
-var errUnauthenticated = errors.New("authentication required")
 
 // ClientIP is the exported form used by the portal, so trusted-proxy handling
 // is implemented once rather than diverging between the two surfaces.

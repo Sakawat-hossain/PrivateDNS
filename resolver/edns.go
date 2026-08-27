@@ -54,13 +54,6 @@ func removeECS(opt *dns.OPT) {
 	opt.Option = kept
 }
 
-// wantsDNSSEC reports whether the client set the DNSSEC OK bit, meaning it
-// wants DNSSEC records included in the answer.
-func wantsDNSSEC(req *dns.Msg) bool {
-	opt := req.IsEdns0()
-	return opt != nil && opt.Do()
-}
-
 // clientUDPSize reports the response size the client can accept, so replies on
 // the plain listener can be truncated at the right threshold rather than a
 // guess.
