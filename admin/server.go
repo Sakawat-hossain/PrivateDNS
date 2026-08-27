@@ -114,6 +114,10 @@ type Server struct {
 	started time.Time
 	srv     *http.Server
 	stopCh  chan struct{}
+
+	// Holds a freshly created API token across one redirect, so the secret
+	// never travels in a URL.
+	tokens *tokenStash
 }
 
 func New(cfg Config, log *slog.Logger) (*Server, error) {
@@ -151,6 +155,7 @@ func New(cfg Config, log *slog.Logger) (*Server, error) {
 		log:     log,
 		started: time.Now(),
 		stopCh:  make(chan struct{}),
+		tokens:  newTokenStash(),
 	}, nil
 }
 

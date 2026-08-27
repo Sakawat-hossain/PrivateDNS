@@ -486,25 +486,57 @@ func TestTokenCreationCannotExceedTheOwnersRole(t *testing.T) {
 	}
 }
 
+// TestTokenIsShownOnceThenOnlyByPrefix checks what remains visible afterwards.
+//
+// This test previously asserted the token arrived in the redirect URL, which
+// was the defect rather than the requirement. It now checks the property that
+// was actually intended: after the one-time reveal, the listing shows only the
+// 12-character lookup prefix and never the full secret.
 func TestTokenIsShownOnceThenOnlyByPrefix(t *testing.T) {
 	h := newHarness(t)
 	h.user("admin@example.com", backend.RoleAdmin)
 	s := h.login("admin@example.com")
 
-	rec := h.post(s, "/tokens", url.Values{
+	h.post(s, "/tokens", url.Values{
 		"name": {"integration"}, "scopes": {"tenants:read"},
 	})
-	loc := rec.Header().Get("Location")
-	if !strings.Contains(loc, "new=pdns_") {
-		t.Fatalf("the token value was not returned once (Location %q)", loc)
+
+	// The reveal, once.
+	first := h.get(s, "/tokens").Body.String()
+	if !revealsToken(first) {
+		t.Fatal("the token was not revealed after creation")
 	}
 
-	// It must not appear in the listing afterwards.
+	// Recover the full value from the reveal so the listing can be checked
+	// against it directly.
+	full := extractRevealedToken(first)
+	if len(full) < 32 {
+		t.Fatalf("could not read the revealed token (got %q)", full)
+	}
+
+	// Afterwards: prefix only.
 	body := h.get(s, "/tokens").Body.String()
-	full := strings.TrimPrefix(loc, "/tokens?new=")
-	if len(full) > 20 && strings.Contains(body, full) {
+	if strings.Contains(body, full) {
 		t.Fatal("the full token value appears in the listing")
 	}
+	if !strings.Contains(body, full[:12]) {
+		t.Fatal("the lookup prefix is not shown, so a token cannot be identified")
+	}
+}
+
+// extractRevealedToken pulls the token out of the reveal card.
+func extractRevealedToken(body string) string {
+	const marker = `<code id="newtoken">`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(marker):]
+	j := strings.Index(rest, "<")
+	if j < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:j])
 }
 
 // ---- accounts ----
@@ -670,5 +702,66 @@ privatedns_uptime_seconds 3600
 	}
 	if _, ok := got["malformed"]; ok {
 		t.Error("a malformed line produced a metric")
+	}
+}
+
+// revealsToken reports whether a page is showing a full, freshly created API
+// token. The 12-character prefix in the listing table is shown by design and
+// is not a secret, so matching on "pdns_" alone would be the wrong signal.
+func revealsToken(body string) bool {
+	return strings.Contains(body, "Copy this now")
+}
+
+// TestTokenNeverAppearsInAURL guards a real defect found in review.
+//
+// The creation handler used to redirect to /tokens?new=<plaintext>. A secret in
+// a query string is written to browser history, sent in the Referer header on
+// any outbound link, and recorded verbatim in nginx access logs and every proxy
+// between the operator and the server.
+func TestTokenNeverAppearsInAURL(t *testing.T) {
+	h := newHarness(t)
+	h.user("admin@example.com", backend.RoleAdmin)
+	s := h.login("admin@example.com")
+
+	rec := h.post(s, "/tokens", url.Values{
+		"name": {"integration"}, "scopes": {"tenants:read"},
+	})
+
+	location := rec.Header().Get("Location")
+	if strings.Contains(location, "pdns_") || strings.Contains(location, "new=") {
+		t.Fatalf("the token was placed in the redirect URL: %s", location)
+	}
+
+	// It must still reach the page exactly once.
+	if !revealsToken(h.get(s, "/tokens").Body.String()) {
+		t.Fatal("the token was not shown after creation")
+	}
+
+	// And not a second time. "Copy this now, it cannot be shown again" has to
+	// be true, or an operator leaves the tab open as somewhere to find it.
+	if revealsToken(h.get(s, "/tokens").Body.String()) {
+		t.Fatal("the token was shown again on reload")
+	}
+}
+
+// TestStashedTokenIsScopedToItsSession stops one operator collecting another's
+// freshly created credential.
+func TestStashedTokenIsScopedToItsSession(t *testing.T) {
+	h := newHarness(t)
+	h.user("a@example.com", backend.RoleAdmin)
+	h.user("b@example.com", backend.RoleAdmin)
+
+	sessionA := h.login("a@example.com")
+	sessionB := h.login("b@example.com")
+
+	h.post(sessionA, "/tokens", url.Values{
+		"name": {"a-token"}, "scopes": {"tenants:read"},
+	})
+
+	if revealsToken(h.get(sessionB, "/tokens").Body.String()) {
+		t.Fatal("another operator's session was shown the new token")
+	}
+	if !revealsToken(h.get(sessionA, "/tokens").Body.String()) {
+		t.Fatal("the creating session did not receive its own token")
 	}
 }

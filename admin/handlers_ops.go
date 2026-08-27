@@ -480,7 +480,8 @@ func (s *Server) handleTokenList(w http.ResponseWriter, r *http.Request, sess *o
 	p := page{Title: "API tokens", Nav: "tokens", Tokens: tokens}
 	p.Flash, p.FlashKind = flash(r)
 	// Shown exactly once, immediately after creation, then never again.
-	p.NewToken = r.URL.Query().Get("new")
+	// Reading removes it, so a refresh does not show it a second time.
+	p.NewToken = s.tokens.take(sess.token)
 	s.render(w, r, "tokens.html", p)
 }
 
@@ -524,9 +525,11 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request, sess 
 	s.audit(r, sess, backend.ActionTokenCreate, "token",
 		strconv.FormatInt(tok.ID, 10), map[string]any{"name": name, "scopes": tok.Scopes})
 
-	// Returned in the URL once. Only its hash is stored, so this is the single
-	// opportunity to copy it.
-	http.Redirect(w, r, "/tokens?new="+plaintext, http.StatusSeeOther)
+	// Held server-side for one redirect rather than placed in the URL. A
+	// query string reaches browser history, Referer headers and every access
+	// log between here and the operator.
+	s.tokens.put(sess.token, plaintext)
+	redirect(w, r, "/tokens", "created")
 }
 
 func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request, sess *opSession) {
