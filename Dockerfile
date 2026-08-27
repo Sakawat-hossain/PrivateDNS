@@ -6,7 +6,7 @@
 # reaches the container with nothing to run.
 
 # ---------------------------------------------------------------------------
-FROM golang:1.24-alpine AS build
+FROM golang:1.27-alpine AS build
 
 # git is needed for the version stamp; ca-certificates is copied out later.
 RUN apk add --no-cache git ca-certificates tzdata
