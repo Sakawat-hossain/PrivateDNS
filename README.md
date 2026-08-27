@@ -85,6 +85,7 @@ never open to the public, which is what keeps it off amplification-abuse lists.
 | DNS-check diagnostic | working |
 | Operator dashboard with reseller isolation | working |
 | Consistent backup and restore | working |
+| DNS rebinding protection | working |
 | Installer, Docker, Debian packaging | written, see caveats |
 
 ## Install
@@ -243,7 +244,56 @@ Every route except `/metrics` and `/healthz` requires
 | GET | `/version` | Build and schema version. |
 | GET | `/metrics` | Prometheus text format. |
 
+## Architecture
+
+```mermaid
+flowchart TB
+    phone["Phone or router<br/>Private DNS set to<br/>routeID.dns.example.com"]
+    browser["Browser<br/>Customer portal"]
+    op["Operator<br/>via SSH tunnel"]
+
+    subgraph public["Public-facing"]
+        resolver["privatedns-resolver<br/>DoT 853 · DoH 443 · DNS 53"]
+        portal["privatedns-portal<br/>behind nginx"]
+    end
+
+    subgraph internal["Loopback only"]
+        backend["privatedns-backend<br/>JSON API"]
+        admin["privatedns-admin<br/>Operator dashboard"]
+    end
+
+    db[("SQLite<br/>policy database")]
+    upstream["Unbound<br/>recursion"]
+
+    phone -->|"tenant identity in the SNI"| resolver
+    browser --> portal
+    op -.->|"never public"| admin
+
+    resolver --> db
+    portal --> db
+    backend --> db
+    admin --> db
+
+    resolver -->|"cache miss"| upstream
+    admin -->|"live status"| resolver
+    portal -->|"diagnostic probe"| resolver
+```
+
+One database, four processes, four different exposure profiles. The policy
+snapshot reloads every second and the tenant is looked up per query, which is
+what bounds revocation at one second even on a connection a phone has held
+open for hours.
+
 ## Security
+
+A structural audit was carried out across the codebase; findings, threat model
+and known gaps are in [docs/security.md](docs/security.md). Two things found
+and fixed during it: an API token that travelled in a redirect URL, and the
+absence of DNS rebinding protection.
+
+Command injection and path traversal are structurally impossible rather than
+merely guarded — the codebase executes no processes and derives no file path
+from request input.
 
 The admin API binds to `127.0.0.1` by default. **Never expose it to the
 internet.** Put it behind an authenticated reverse proxy or a private network if
@@ -461,7 +511,7 @@ restores the previous binaries if the new version fails its health check.
 | ~~3~~ | ~~Customer portal — IP registration, iOS profiles, diagnostics~~ — done |
 | ~~4~~ | ~~Operator dashboard — customers, tenants, routing, triage, audit~~ — done |
 | ~~5~~ | ~~Deployment — installer, Docker, Debian packaging, backup and restore~~ — done |
-| 6 | CI/CD, signed releases, security review |
+| ~~6~~ | ~~CI/CD, signed releases, security review~~ — done |
 
 ## Contributing
 
