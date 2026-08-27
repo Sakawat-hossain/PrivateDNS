@@ -289,6 +289,12 @@ main() {
   TARGET_VERSION="${1:-$(latest_version)}"
   [[ -n "$TARGET_VERSION" ]] || fail "could not determine a target version"
 
+  # The tag becomes a path segment in the download URL. Reject anything that
+  # is not one here, where the message can say so plainly.
+  if [[ ! "$TARGET_VERSION" =~ ^v?[0-9A-Za-z._-]+$ ]]; then
+    fail "'${TARGET_VERSION}' is not a valid release tag"
+  fi
+
   printf '\n  %s → %s\n  components: %s\n\n' "$current" "$TARGET_VERSION" "${INSTALLED[*]}"
 
   if [[ "$current" == "$TARGET_VERSION" ]]; then

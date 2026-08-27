@@ -20,7 +20,10 @@
 set -euo pipefail
 
 REPO="Sakawat-hossain/PrivateDNS"
-VERSION="${VERSION:-latest}"
+# The release to install. VERSION is the documented override, but it is
+# immediately copied: /etc/os-release assigns VERSION too, and anything read
+# from it must not be able to reach the download URL.
+RELEASE_TAG="${VERSION:-latest}"
 
 PREFIX="${PREFIX:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/private-dns}"
@@ -53,15 +56,27 @@ check_os() {
   step "Checking the system"
 
   [[ -f /etc/os-release ]] || fail "cannot identify this system (no /etc/os-release)"
-  # shellcheck disable=SC1091
-  . /etc/os-release
 
-  case "${ID:-}${ID_LIKE:-}" in
-    *debian*|*ubuntu*) ok "${PRETTY_NAME:-$ID}" ;;
+  # Read the fields in a subshell rather than sourcing into this one.
+  #
+  # /etc/os-release defines NAME, ID and VERSION. Sourcing it directly
+  # overwrites any variable of those names already set here — and VERSION is
+  # the release being installed. On Debian 12 that silently became
+  # "12 (bookworm)", so the download URL was
+  # releases/download/12 (bookworm)/SHA256SUMS and the install failed with a
+  # message that pointed nowhere near the cause.
+  local os_pretty os_family
+  # shellcheck disable=SC1091
+  os_pretty="$( . /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-${NAME:-unknown}}" )"
+  # shellcheck disable=SC1091
+  os_family="$( . /etc/os-release 2>/dev/null && printf '%s' "${ID:-}${ID_LIKE:-}" )"
+
+  case "$os_family" in
+    *debian*|*ubuntu*) ok "$os_pretty" ;;
     *)
       # Not refused: the units and paths are generic enough to work elsewhere.
       # But it is untested, and saying so is better than a surprise later.
-      warn "${PRETTY_NAME:-$ID} is not a tested platform; Debian and Ubuntu are"
+      warn "$os_pretty is not a tested platform; Debian and Ubuntu are"
       ;;
   esac
 
@@ -125,12 +140,21 @@ check_ports() {
 # ---------------------------------------------------------------------------
 
 resolve_version() {
-  if [[ "$VERSION" == "latest" ]]; then
-    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  if [[ "$RELEASE_TAG" == "latest" ]]; then
+    RELEASE_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
       | grep -m1 '"tag_name"' | cut -d'"' -f4)"
-    [[ -n "$VERSION" ]] || fail "could not determine the latest release"
+    [[ -n "$RELEASE_TAG" ]] || fail "could not determine the latest release"
   fi
-  ok "version ${VERSION}"
+
+  # A tag is a path segment in every download URL below. Anything with a space
+  # or a slash in it is not a tag, and pasting it into a URL produces a curl
+  # error that says nothing about where the value came from. Reject it here,
+  # where the message can name the real problem.
+  if [[ ! "$RELEASE_TAG" =~ ^v?[0-9A-Za-z._-]+$ ]]; then
+    fail "'${RELEASE_TAG}' is not a valid release tag; set VERSION to a published tag or leave it unset"
+  fi
+
+  ok "version ${RELEASE_TAG}"
 }
 
 download_and_verify() {
@@ -139,10 +163,10 @@ download_and_verify() {
   WORK="$(mktemp -d)"
   trap 'rm -rf "$WORK"' EXIT
 
-  local base="https://github.com/${REPO}/releases/download/${VERSION}"
+  local base="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
 
   curl -fsSL "${base}/SHA256SUMS" -o "${WORK}/SHA256SUMS" \
-    || fail "could not fetch SHA256SUMS for ${VERSION}"
+    || fail "could not fetch SHA256SUMS for ${RELEASE_TAG}"
 
   local comp binary
   for comp in $COMPONENTS; do
@@ -300,7 +324,7 @@ install_services() {
     if [[ -f "${SCRIPT_DIR}/../deploy/systemd/privatedns-${comp}.service" ]]; then
       install -m 0644 "${SCRIPT_DIR}/../deploy/systemd/privatedns-${comp}.service" "$unit"
     else
-      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${VERSION}/deploy/systemd/privatedns-${comp}.service" \
+      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${RELEASE_TAG}/deploy/systemd/privatedns-${comp}.service" \
         -o "$unit" || fail "could not fetch the ${comp} service unit"
     fi
     ok "privatedns-${comp}.service"
