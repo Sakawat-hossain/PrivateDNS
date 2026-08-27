@@ -117,6 +117,65 @@ MSG
 fi
 export CF_DNS_API_TOKEN
 
+# Every authoritative nameserver must actually serve the zone.
+#
+# lego writes the challenge through the Cloudflare API, so only Cloudflare's
+# nameservers get it. If the registrar still delegates to a previous DNS host
+# as well, that host answers for the zone knowing nothing about it -- and both
+# lego's propagation check and Let's Encrypt's validation query whichever
+# authoritative server they happen to pick. The visible symptom is
+# "waiting for record propagation" repeating until the two minute timeout,
+# which reads as a hang rather than a misconfigured delegation.
+#
+# Needs dig; skipped rather than fatal if dnsutils is not installed.
+check_delegation() {
+  command -v dig >/dev/null 2>&1 || return 0
+
+  local zone="${BASE_DOMAIN#*.}"          # dns.example.com -> example.com
+  local ns_list
+  ns_list="$(dig +short +time=5 +tries=2 NS "$zone" 2>/dev/null)" || return 0
+  [[ -n "$ns_list" ]] || return 0
+
+  local ns dead=() live=0
+  while read -r ns; do
+    [[ -n "$ns" ]] || continue
+    local soa
+    soa="$(dig +short +time=5 +tries=1 SOA "$zone" "@${ns%.}" 2>/dev/null)" || soa=""
+    if [[ -n "$soa" ]]; then
+      live=$((live + 1))
+    else
+      dead+=("${ns%.}")
+    fi
+  done <<< "$ns_list"
+
+  [[ ${#dead[@]} -eq 0 ]] && return 0
+
+  cat >&2 <<MSG
+
+WARNING: ${zone} is delegated to nameservers that do not serve it.
+
+  not answering:  ${dead[*]}
+  answering:      ${live}
+
+The challenge record is written through the Cloudflare API, so only
+Cloudflare's nameservers will have it. Let's Encrypt queries whichever
+authoritative server it picks, so validation here is a coin flip -- and
+"waiting for record propagation" will most likely run to its timeout.
+
+Remove the nameservers above from the domain's delegation AT THE REGISTRAR,
+leaving only the Cloudflare pair, then run this again.
+
+Check with:  dig +short NS ${zone}
+
+MSG
+  if [[ -t 0 ]]; then
+    read -r -p "Continue anyway? [y/N] " reply
+    [[ "$reply" =~ ^[Yy]$ ]] || exit 1
+  fi
+}
+
+check_delegation
+
 echo "==> Issuing for ${BASE_DOMAIN} and *.${BASE_DOMAIN}"
 echo "    Writing a TXT record at _acme-challenge.${BASE_DOMAIN} and waiting for"
 echo "    Let's Encrypt to see it. A minute or two is normal."

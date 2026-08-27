@@ -89,6 +89,14 @@ check_os() {
   esac
   ok "architecture ${ARCH}"
 
+  # dig is not required, but privatedns-issue-cert uses it to spot a
+  # broken NS delegation before ACME times out on it. Offer it rather
+  # than installing anything unasked.
+  if ! command -v dig >/dev/null 2>&1; then
+    warn "dig not installed; certificate issuance cannot pre-check DNS delegation"
+    warn "  apt-get install -y dnsutils"
+  fi
+
   for tool in curl sha256sum install useradd; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool is required but not installed"
   done
