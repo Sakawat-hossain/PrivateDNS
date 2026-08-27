@@ -49,8 +49,14 @@ cmd_status() {
   printf '  %-10s %-10s %-10s\n' "COMPONENT" "STATE" "ON BOOT"
   for comp in $COMPONENTS; do
     [[ -x "${PREFIX}/privatedns-${comp}" ]] || continue
-    state="$(systemctl is-active "privatedns-${comp}" 2>/dev/null || echo inactive)"
-    enabled="$(systemctl is-enabled "privatedns-${comp}" 2>/dev/null || echo disabled)"
+    # systemctl prints the state AND exits non-zero for anything that is not
+    # active, so `is-active ... || echo inactive` appends a second word to a
+    # perfectly good answer. A resolver in a restart loop reported
+    # "activating\ninactive", which wrapped the table onto two lines.
+    state="$(systemctl is-active "privatedns-${comp}" 2>/dev/null)" || true
+    state="${state%%$'\n'*}"; state="${state:-unknown}"
+    enabled="$(systemctl is-enabled "privatedns-${comp}" 2>/dev/null)" || true
+    enabled="${enabled%%$'\n'*}"; enabled="${enabled:-disabled}"
     if [[ "$state" == "active" ]]; then
       printf '  %-10s %s%-10s%s %-10s\n' "$comp" "$GREEN" "$state" "$OFF" "$enabled"
     else
@@ -79,7 +85,7 @@ cmd_status() {
 
   if [[ -f "${CONFIG_DIR}/certs/fullchain.pem" ]]; then
     local expiry
-    expiry="$(openssl x509 -enddate -noout -in "${CONFIG_DIR}/certs/fullchain.pem" 2>/dev/null | cut -d= -f2)"
+    expiry="$(openssl x509 -enddate -noout -in "${CONFIG_DIR}/certs/fullchain.pem" 2>/dev/null | cut -d= -f2)" || true
     if [[ -n "$expiry" ]]; then
       local days
       days=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
@@ -142,7 +148,7 @@ cmd_backups() {
   for d in "$BACKUP_DIR"/*/; do
     [[ -d "$d" ]] || continue
     local size when
-    size="$(du -sh "$d" 2>/dev/null | cut -f1)"
+    size="$(du -sh "$d" 2>/dev/null | cut -f1)" || true
     when="$(basename "$d")"
     printf '    %-28s %s\n' "$when" "$size"
   done
@@ -167,7 +173,7 @@ cmd_restore() {
   local db cfg
   cfg="$(resolver_config)"
   # Works for both formats: `db_path: /x` and `"db_path": "/x"`.
-  db="$(sed -n 's/^[[:space:]]*"\?db_path"\?[[:space:]]*:[[:space:]]*"\?\([^",[:space:]]*\).*/\1/p' "$cfg" 2>/dev/null)"
+  db="$(sed -n 's/^[[:space:]]*"\?db_path"\?[[:space:]]*:[[:space:]]*"\?\([^",[:space:]]*\).*/\1/p' "$cfg" 2>/dev/null)" || true
   db="${db%%$'\n'*}"
   db="${db:-${DATA_DIR}/policy.db}"
 

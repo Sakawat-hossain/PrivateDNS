@@ -67,9 +67,9 @@ check_os() {
   # message that pointed nowhere near the cause.
   local os_pretty os_family
   # shellcheck disable=SC1091
-  os_pretty="$( . /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-${NAME:-unknown}}" )"
+  os_pretty="$( . /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-${NAME:-unknown}}" )" || true
   # shellcheck disable=SC1091
-  os_family="$( . /etc/os-release 2>/dev/null && printf '%s' "${ID:-}${ID_LIKE:-}" )"
+  os_family="$( . /etc/os-release 2>/dev/null && printf '%s' "${ID:-}${ID_LIKE:-}" )" || true
 
   case "$os_family" in
     *debian*|*ubuntu*) ok "$os_pretty" ;;

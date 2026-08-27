@@ -74,6 +74,27 @@ for script in scripts/install.sh scripts/update.sh scripts/uninstall.sh \
 done
 [[ $fails -eq 0 ]] && pass "no pipeline can be killed by its own reader"
 
+
+echo "==> Checking assignments cannot abort a script silently under set -e"
+
+# VAR="$(cmd)" takes the exit status of the substitution. Under `set -e` a
+# failing substitution kills the script AT THE ASSIGNMENT, so every check
+# written below it is unreachable. issue-cert.sh died at exactly such a line
+# with status 127 and no message, because the substitution's stderr went to
+# /dev/null -- the validation meant to explain the problem never ran.
+for script in scripts/*.sh scripts/private-dns deploy/scripts/*.sh; do
+  [[ -f "$script" ]] || continue
+  grep -q 'set -e' "$script" || continue
+
+  hits="$(sed -e 's/#.*$//' "$script" \
+          | grep -vF '||' | grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="\$\(.*2>[[:space:]]*/dev/null.*\)"[[:space:]]*$' \
+          || true)"
+  if [[ -n "$hits" ]]; then
+    report "$script assigns from a silenced substitution with no || fallback"
+    printf '%s\n' "$hits" | sed 's/^/        /' >&2
+  fi
+done
+[[ $fails -eq 0 ]] && pass "no assignment can abort a script without saying why"
 echo "==> Checking the installer promises only what it installs"
 
 # v1.0.3 told the operator to run private-dns and privatedns-issue-cert in its

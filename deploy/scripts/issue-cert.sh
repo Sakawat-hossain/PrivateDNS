@@ -57,12 +57,41 @@ fi
 # anything else in it overwrite BASE_DOMAIN, EMAIL or CERT_DIR, which are set
 # above -- the same collision that broke the installer on Debian in v1.0.0.
 # shellcheck disable=SC1091
-CF_DNS_API_TOKEN="$( . /etc/private-dns/cloudflare.env >/dev/null 2>&1 && printf '%s' "${CF_DNS_API_TOKEN:-}" )"
+# The `|| true` is load-bearing. Under `set -e` an assignment takes the exit
+# status of its command substitution, and sourcing a file that holds a bare
+# token runs that token as a command -- status 127. The script then died
+# there, silently, because the only message went to /dev/null, and every
+# check below this line was unreachable.
+CF_DNS_API_TOKEN="$( . /etc/private-dns/cloudflare.env >/dev/null 2>&1 && printf '%s' "${CF_DNS_API_TOKEN:-}" )" || true
 if [[ -z "$CF_DNS_API_TOKEN" ]]; then
-  echo "no CF_DNS_API_TOKEN in /etc/private-dns/cloudflare.env" >&2
+  # The common mistake is writing the token on its own, with no variable name.
+  # This file is shell, not a bare secret: sourcing it then tries to run the
+  # token as a command, and CF_DNS_API_TOKEN is never set. Name that case
+  # exactly rather than saying only that the variable is missing.
+  if grep -qE '^[[:space:]]*[A-Za-z0-9_-]{20,}[[:space:]]*$' \
+       /etc/private-dns/cloudflare.env 2>/dev/null; then
+    cat >&2 <<'MSG'
+/etc/private-dns/cloudflare.env holds a bare value with no variable name.
+
+It has to read:
+
+    CF_DNS_API_TOKEN=your_token_here
+
+Rewrite it, replacing YOUR_TOKEN:
+
+    printf 'CF_DNS_API_TOKEN=YOUR_TOKEN\n' > /etc/private-dns/cloudflare.env
+    chmod 600 /etc/private-dns/cloudflare.env
+MSG
+  else
+    echo "no CF_DNS_API_TOKEN in /etc/private-dns/cloudflare.env" >&2
+  fi
   exit 1
 fi
 export CF_DNS_API_TOKEN
+
+echo "==> Issuing for ${BASE_DOMAIN} and *.${BASE_DOMAIN}"
+echo "    Writing a TXT record at _acme-challenge.${BASE_DOMAIN} and waiting for"
+echo "    Let's Encrypt to see it. A minute or two is normal."
 
 
 mkdir -p "$CERT_DIR" "$LEGO_DIR"
@@ -84,3 +113,4 @@ install -m 0640 -g privatedns "$LEGO_DIR/certificates/$BASE_DOMAIN.key" "$CERT_D
 # The resolver re-reads the certificate from disk within a minute, so a renewal
 # needs no restart and drops no connections.
 echo "certificate installed to $CERT_DIR"
+echo "==> Now restart the resolver: systemctl restart privatedns-resolver"
