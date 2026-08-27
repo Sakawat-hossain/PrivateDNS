@@ -240,4 +240,8 @@ install -m 0640 -g privatedns "$LEGO_DIR/certificates/$BASE_DOMAIN.key" "$CERT_D
 # The resolver re-reads the certificate from disk within a minute, so a renewal
 # needs no restart and drops no connections.
 echo "certificate installed to $CERT_DIR"
-echo "==> Now restart the resolver: systemctl restart privatedns-resolver"
+# No restart. Since v1.0.6 the resolver re-reads the certificate from disk
+# on an interval, so a first issuance and a renewal both come into service
+# on their own -- and a renewal does it without dropping a connection.
+echo "==> The resolver picks this up within a minute. No restart needed."
+echo "    Confirm with: private-dns status"

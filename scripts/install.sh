@@ -597,7 +597,8 @@ ${BOLD}3. Get a wildcard certificate${OFF}
      ACME_EMAIL=you@example.com BASE_DOMAIN=${domain_hint} \\
        ${PREFIX}/privatedns-issue-cert run
 
-   Then: systemctl restart privatedns-resolver
+   No restart needed -- the resolver picks up the certificate within a
+   minute. Confirm with: private-dns status
 
 ${BOLD}Afterwards${OFF}
 
