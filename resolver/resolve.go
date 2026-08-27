@@ -20,6 +20,7 @@ type Metrics struct {
 	Refused    atomic.Uint64
 	Throttled  atomic.Uint64
 	Malformed  atomic.Uint64
+	Rebind     atomic.Uint64
 	CacheHits  atomic.Uint64
 	Upstream   atomic.Uint64
 	UpstreamNG atomic.Uint64
@@ -34,6 +35,7 @@ type Resolver struct {
 	limiter *RateLimiter
 	usage   *UsageCollector
 	probes  *ProbeRecorder
+	rebind  rebindPolicy
 	log     *slog.Logger
 
 	udpClient *dns.Client
@@ -48,6 +50,7 @@ func NewResolver(cfg Config, store Store, block *Blocklist, cache *Cache, m *Met
 		block:     block,
 		cache:     cache,
 		m:         m,
+		rebind:    newRebindPolicy(cfg),
 		log:       slog.Default(),
 		udpClient: &dns.Client{Net: "udp", Timeout: 4 * time.Second, UDPSize: maxUDPSize},
 		tcpClient: &dns.Client{Net: "tcp", Timeout: 6 * time.Second},
@@ -185,6 +188,15 @@ func (r *Resolver) Resolve(req *dns.Msg, id identity) *dns.Msg {
 		return errorReply(req, dns.RcodeServerFailure)
 	}
 	r.m.Upstream.Add(1)
+
+	// Filter before caching, so a rebinding answer is not stored and served to
+	// every later client from cache.
+	if dropped := filterRebind(reply, name, r.rebind); dropped > 0 {
+		r.m.Rebind.Add(uint64(dropped))
+		r.log.Warn("stripped private-space answers",
+			"domain", redactName(name), "records", dropped)
+	}
+
 	r.cache.Put(q, reply)
 
 	reply.Id = req.Id

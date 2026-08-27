@@ -66,6 +66,20 @@ type Config struct {
 	// privacy is the product.
 	StripECS bool `yaml:"strip_ecs" json:"strip_ecs"`
 
+	// BlockRebind strips private-space addresses from upstream answers.
+	//
+	// On by default. A public name resolving to 192.168.x has no legitimate
+	// use and is how a browser gets turned into a proxy into the network it
+	// sits on.
+	BlockRebind bool `yaml:"block_rebind" json:"block_rebind"`
+
+	// RebindAllowDomains are names permitted to resolve into private space.
+	//
+	// Split-horizon DNS is a real arrangement -- an internal name resolving to
+	// 10.x is correct on a corporate network -- so it needs an exemption rather
+	// than forcing the protection off entirely.
+	RebindAllowDomains []string `yaml:"rebind_allow_domains" json:"rebind_allow_domains"`
+
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string `yaml:"log_level" json:"log_level"`
 
@@ -96,9 +110,10 @@ func DefaultConfig() Config {
 		RateLimitBurst:    200,
 		MaxConnsPerTenant: 64,
 
-		StripECS:  true,
-		LogLevel:  "info",
-		LogFormat: "text",
+		StripECS:    true,
+		BlockRebind: true,
+		LogLevel:    "info",
+		LogFormat:   "text",
 	}
 }
 

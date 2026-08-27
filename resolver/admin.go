@@ -369,6 +369,7 @@ func (a *Admin) metrics(w http.ResponseWriter, r *http.Request) {
 	c("privatedns_allowlisted_total", "Queries matched by an allowlist rule.", a.m.Allowed.Load())
 	c("privatedns_refused_total", "Queries refused for lack of a valid tenant.", a.m.Refused.Load())
 	c("privatedns_throttled_total", "Queries rejected by the per-tenant rate limit.", a.m.Throttled.Load())
+	c("privatedns_rebind_blocked_total", "Private-space records stripped from upstream answers.", a.m.Rebind.Load())
 	c("privatedns_malformed_total", "Messages rejected as malformed.", a.m.Malformed.Load())
 	c("privatedns_cache_hits_total", "Queries served from cache.", a.m.CacheHits.Load())
 	c("privatedns_upstream_total", "Queries forwarded upstream.", a.m.Upstream.Load())
