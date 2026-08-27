@@ -68,7 +68,7 @@ vuln: ## Check dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: check
-check: fmt-check vet test scripts-check ## Everything CI runs
+check: fmt-check vet test scripts-check contract-check ## Everything CI runs
 
 .PHONY: release
 release: ## Cross-compile release binaries into dist/
@@ -115,3 +115,7 @@ scripts-check: ## Syntax-check every shipped shell script
 .PHONY: checksums
 checksums: release ## Regenerate SHA256SUMS over dist/
 	@cd $(DIST) && sha256sum privatedns-* > SHA256SUMS && cat SHA256SUMS
+
+.PHONY: contract-check
+contract-check: ## Assert the release workflow matches what the installer downloads
+	scripts/check-release-contract.sh
