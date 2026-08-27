@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+#
+# PrivateDNS management command.
+#
+# A dispatcher over the individual scripts, so an operator has one thing to
+# remember rather than five paths.
+
+set -euo pipefail
+
+PREFIX="${PREFIX:-/usr/local/bin}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/private-dns}"
+DATA_DIR="${DATA_DIR:-/var/lib/private-dns}"
+BACKUP_DIR="${BACKUP_DIR:-${DATA_DIR}/backups}"
+
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
+if [[ ! -t 1 ]]; then RED=''; GREEN=''; YELLOW=''; BOLD=''; OFF=''; fi
+
+COMPONENTS="resolver backend portal admin"
+
+usage() {
+  cat <<EOF
+${BOLD}private-dns${OFF} — manage a PrivateDNS installation
+
+  status              What is running, and whether it is healthy
+  logs [component]    Follow the logs (default: resolver)
+  update [version]    Upgrade, with automatic rollback on failure
+  update --check      Report the available version, change nothing
+  backup              Take a verified snapshot now
+  restore <file>      Restore a database backup
+  backups             List the backups on this host
+  restart [component] Restart everything, or one component
+  uninstall           Remove PrivateDNS
+
+Paths:
+  config  ${CONFIG_DIR}
+  data    ${DATA_DIR}
+  backups ${BACKUP_DIR}
+EOF
+}
+
+require_root() {
+  [[ $EUID -eq 0 ]] || { printf '%s✗%s run this with sudo\n' "$RED" "$OFF" >&2; exit 1; }
+}
+
+cmd_status() {
+  printf '\n%sPrivateDNS%s  %s\n\n' "$BOLD" "$OFF" "$("${PREFIX}/privatedns-resolver" -version 2>/dev/null || echo 'version unknown')"
+
+  local comp state enabled
+  printf '  %-10s %-10s %-10s\n' "COMPONENT" "STATE" "ON BOOT"
+  for comp in $COMPONENTS; do
+    [[ -x "${PREFIX}/privatedns-${comp}" ]] || continue
+    state="$(systemctl is-active "privatedns-${comp}" 2>/dev/null || echo inactive)"
+    enabled="$(systemctl is-enabled "privatedns-${comp}" 2>/dev/null || echo disabled)"
+    if [[ "$state" == "active" ]]; then
+      printf '  %-10s %s%-10s%s %-10s\n' "$comp" "$GREEN" "$state" "$OFF" "$enabled"
+    else
+      printf '  %-10s %s%-10s%s %-10s\n' "$comp" "$YELLOW" "$state" "$OFF" "$enabled"
+    fi
+  done
+
+  printf '\n'
+
+  # Readiness rather than liveness: the interesting question is whether the
+  # resolver can actually serve, not whether a process exists.
+  local ready
+  ready="$(curl -fsS --max-time 3 http://127.0.0.1:8053/readyz 2>/dev/null || echo '')"
+  if [[ -n "$ready" ]]; then
+    if grep -q '"ok":true' <<<"$ready"; then
+      printf '  %sready%s\n' "$GREEN" "$OFF"
+    else
+      printf '  %snot ready%s\n' "$YELLOW" "$OFF"
+      # Naming the failing check saves reading a log.
+      grep -o '"name":"[^"]*","ok":false[^}]*' <<<"$ready" 2>/dev/null \
+        | sed 's/"name":"/    - /; s/","ok":false//; s/,"detail":"/: /; s/"$//' || true
+    fi
+  else
+    printf '  %sthe admin endpoint is not answering%s\n' "$YELLOW" "$OFF"
+  fi
+
+  if [[ -f "${CONFIG_DIR}/certs/fullchain.pem" ]]; then
+    local expiry
+    expiry="$(openssl x509 -enddate -noout -in "${CONFIG_DIR}/certs/fullchain.pem" 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$expiry" ]]; then
+      local days
+      days=$(( ( $(date -d "$expiry" +%s 2>/dev/null || echo 0) - $(date +%s) ) / 86400 ))
+      if (( days < 0 )); then
+        printf '  %scertificate EXPIRED%s\n' "$RED" "$OFF"
+      elif (( days < 14 )); then
+        printf '  %scertificate expires in %d days%s\n' "$YELLOW" "$days" "$OFF"
+      else
+        printf '  certificate valid for %d days\n' "$days"
+      fi
+    fi
+  else
+    printf '  %sno certificate installed%s — DoT and DoH will not work\n' "$YELLOW" "$OFF"
+  fi
+
+  printf '\n'
+}
+
+cmd_logs() {
+  local comp="${1:-resolver}"
+  exec journalctl -u "privatedns-${comp}" -f -n 50
+}
+
+cmd_backup() {
+  require_root
+  local stamp dest
+  stamp="$(date -u +%Y%m%d-%H%M%S)"
+  dest="${BACKUP_DIR}/manual-${stamp}"
+  install -d -m 0700 "$dest"
+
+  printf '\n  Backing up...\n'
+  "${PREFIX}/privatedns-resolver" -config "${CONFIG_DIR}/config.json" -backup "${dest}/policy.db" \
+    || { printf '  %s✗%s the backup failed\n' "$RED" "$OFF" >&2; exit 1; }
+
+  tar -czf "${dest}/config.tar.gz" -C "$(dirname "$CONFIG_DIR")" "$(basename "$CONFIG_DIR")" 2>/dev/null || true
+  chmod -R 0600 "${dest}"/* 2>/dev/null || true
+
+  printf '  %s✓%s %s\n\n' "$GREEN" "$OFF" "$dest"
+}
+
+cmd_backups() {
+  printf '\n  Backups in %s\n\n' "$BACKUP_DIR"
+  if [[ ! -d "$BACKUP_DIR" ]]; then
+    printf '    none\n\n'
+    return
+  fi
+  local d
+  for d in "$BACKUP_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    local size when
+    size="$(du -sh "$d" 2>/dev/null | cut -f1)"
+    when="$(basename "$d")"
+    printf '    %-28s %s\n' "$when" "$size"
+  done
+  printf '\n'
+}
+
+# cmd_restore stops the services first.
+#
+# Replacing a database file underneath a running process leaves it holding a
+# handle to the old inode, so it carries on serving the previous data until
+# something restarts it — which looks like the restore silently failed.
+cmd_restore() {
+  require_root
+  local src="${1:-}"
+  [[ -n "$src" ]] || { printf '  %s✗%s usage: private-dns restore <file>\n' "$RED" "$OFF" >&2; exit 1; }
+  [[ -f "$src" ]] || { printf '  %s✗%s no such file: %s\n' "$RED" "$OFF" "$src" >&2; exit 1; }
+
+  printf '\n  Checking the backup first...\n'
+  "${PREFIX}/privatedns-resolver" -verify-backup "$src" \
+    || { printf '  %s✗%s that file is not a usable database; nothing changed\n' "$RED" "$OFF" >&2; exit 1; }
+
+  local db
+  db="$(grep -o '"db_path"[^,]*' "${CONFIG_DIR}/config.json" 2>/dev/null | cut -d'"' -f4)"
+  db="${db:-${DATA_DIR}/policy.db}"
+
+  printf '\n  This replaces %s with %s.\n' "$db" "$src"
+  printf '  Any change made since that backup will be lost.\n\n'
+  read -r -p "  Type the word restore to continue: " reply
+  [[ "$reply" == "restore" ]] || { printf '  stopped\n'; exit 1; }
+
+  printf '\n  Stopping services...\n'
+  local comp
+  for comp in $COMPONENTS; do
+    systemctl stop "privatedns-${comp}" 2>/dev/null || true
+  done
+
+  # Keeping what is being replaced, in case the backup turns out to be older
+  # than expected.
+  if [[ -f "$db" ]]; then
+    local aside="${db}.replaced-$(date -u +%Y%m%d-%H%M%S)"
+    mv "$db" "$aside"
+    rm -f "${db}-wal" "${db}-shm"
+    printf '  the previous database is at %s\n' "$aside"
+  fi
+
+  install -m 0600 -o privatedns -g privatedns "$src" "$db"
+
+  printf '  Starting...\n'
+  systemctl start privatedns-resolver 2>/dev/null || true
+  sleep 2
+
+  if systemctl is-active --quiet privatedns-resolver; then
+    printf '  %s✓%s restored\n\n' "$GREEN" "$OFF"
+    printf '  Start the rest when ready: systemctl start privatedns-backend privatedns-portal privatedns-admin\n\n'
+  else
+    printf '  %s✗%s the resolver did not start; check journalctl -u privatedns-resolver\n\n' "$RED" "$OFF"
+    exit 1
+  fi
+}
+
+cmd_restart() {
+  require_root
+  local comp
+  if [[ -n "${1:-}" ]]; then
+    systemctl restart "privatedns-${1}"
+    printf '  %s✓%s restarted privatedns-%s\n' "$GREEN" "$OFF" "$1"
+    return
+  fi
+  for comp in $COMPONENTS; do
+    systemctl is-active --quiet "privatedns-${comp}" 2>/dev/null || continue
+    systemctl restart "privatedns-${comp}"
+    printf '  %s✓%s restarted privatedns-%s\n' "$GREEN" "$OFF" "$comp"
+  done
+}
+
+main() {
+  case "${1:-status}" in
+    status)    cmd_status ;;
+    logs)      shift; cmd_logs "$@" ;;
+    update)    shift; exec "${PREFIX}/update" "$@" ;;
+    backup)    cmd_backup ;;
+    backups)   cmd_backups ;;
+    restore)   shift; cmd_restore "$@" ;;
+    restart)   shift; cmd_restart "$@" ;;
+    uninstall) exec "${PREFIX}/uninstall" ;;
+    -h|--help|help) usage ;;
+    *)         printf 'unknown command: %s\n\n' "$1"; usage; exit 1 ;;
+  esac
+}
+
+main "$@"
