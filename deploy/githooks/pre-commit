@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# Refuse a commit that carries a secret or would break the build.
+#
+# Install with:
+#   git config core.hooksPath deploy/githooks
+#
+# Not installed automatically. A hook that appears without being asked for is
+# surprising, and a surprising hook is one people disable.
+
+set -euo pipefail
+
+fail=0
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[[ -n "$staged" ]] || exit 0
+
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+
+# Files that must never be tracked, whatever they contain.
+while read -r f; do
+  case "$f" in
+    .env|*/.env|*.pem|*.key|cloudflare.env|*/cloudflare.env|\
+    config.json|configs/config.json|*.db|*.sqlite|*.sqlite3)
+      echo "refusing to commit $f"
+      fail=1
+      ;;
+  esac
+done <<< "$staged"
+
+# Content that looks like a live credential.
+if git diff --cached -U0 | grep -nE '^\+.*(BEGIN [A-Z ]*PRIVATE KEY|gh[pous]_[A-Za-z0-9]{20,})'; then
+  echo "the staged diff contains what looks like a private key or GitHub token"
+  fail=1
+fi
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
+if grep -q '\.go$' <<< "$staged"; then
+  if ! out="$(gofmt -l ./cmd ./resolver ./backend ./portal ./admin 2>/dev/null)"; then
+    :
+  elif [[ -n "$out" ]]; then
+    echo "needs gofmt:"
+    echo "$out"
+    fail=1
+  fi
+  if ! go build ./... 2>&1; then
+    echo "the tree does not build"
+    fail=1
+  fi
+fi
+
+# Windows does not carry the executable bit, so a script can be staged 100644
+# and fail with Permission denied on a fresh clone elsewhere.
+while read -r f; do
+  case "$f" in
+    scripts/*.sh|scripts/private-dns|deploy/scripts/*.sh|deploy/debian/build-deb.sh|\
+    deploy/debian/postinst|deploy/debian/prerm|deploy/debian/postrm|deploy/githooks/*)
+      mode="$(git ls-files -s "$f" 2>/dev/null | awk '{print $1}')"
+      if [[ -n "$mode" && "$mode" != "100755" ]]; then
+        echo "$f is $mode; run: git update-index --chmod=+x $f"
+        fail=1
+      fi
+      ;;
+  esac
+done <<< "$staged"
+
+exit $fail
