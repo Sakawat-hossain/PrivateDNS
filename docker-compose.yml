@@ -1,0 +1,112 @@
+# PrivateDNS, containerised.
+#
+#   cp .env.example .env      # then edit it
+#   docker compose up -d
+#
+# All four services share one image and one database volume. They must run on
+# the same host for that to work — the SQLite policy database is a file, not a
+# network service, and two hosts cannot share it.
+
+name: privatedns
+
+services:
+  # The only service that faces the internet on privileged ports.
+  resolver:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: ${IMAGE:-privatedns}:${VERSION:-dev}
+    restart: unless-stopped
+    command: ["-config", "/etc/private-dns/config.json"]
+
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "853:853"
+      - "443:443"
+
+    volumes:
+      - data:/var/lib/private-dns
+      - ./configs:/etc/private-dns:ro
+      - certs:/etc/private-dns/certs:ro
+
+    # Binding 53, 443 and 853 needs this one capability. Everything else is
+    # dropped, including the ability to regain privileges.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+    healthcheck:
+      # The scratch image has no shell and no curl, so the binary checks
+      # itself: if it cannot report a version, it is not running.
+      test: ["CMD", "/usr/local/bin/privatedns-resolver", "-version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  backend:
+    image: ${IMAGE:-privatedns}:${VERSION:-dev}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/privatedns-backend"]
+    command: ["-config", "/etc/private-dns/backend.yaml"]
+    depends_on:
+      - resolver
+    volumes:
+      - data:/var/lib/private-dns
+      - ./configs:/etc/private-dns:ro
+    # Loopback-published: the admin API is not meant to be reachable from
+    # outside this host. Change this only if you know what you are exposing.
+    ports:
+      - "127.0.0.1:8080:8080"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+  # The one web surface intended to be public. Put a TLS-terminating proxy in
+  # front of it; do not publish it directly on 80 or 443.
+  portal:
+    image: ${IMAGE:-privatedns}:${VERSION:-dev}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/privatedns-portal"]
+    command: ["-config", "/etc/private-dns/portal.yaml"]
+    depends_on:
+      - resolver
+    volumes:
+      - data:/var/lib/private-dns
+      - ./configs:/etc/private-dns:ro
+    ports:
+      - "${PORTAL_BIND:-127.0.0.1}:8081:8081"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+  admin:
+    image: ${IMAGE:-privatedns}:${VERSION:-dev}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/privatedns-admin"]
+    command: ["-config", "/etc/private-dns/admin.yaml"]
+    depends_on:
+      - resolver
+    volumes:
+      - data:/var/lib/private-dns
+      - ./configs:/etc/private-dns:ro
+    # Loopback only, and it should stay that way. Reach it over an SSH tunnel:
+    #   ssh -L 8082:127.0.0.1:8082 you@this-host
+    ports:
+      - "127.0.0.1:8082:8082"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+volumes:
+  # Named rather than bind-mounted so the database is not sitting in the
+  # working directory where a stray `git clean` would reach it.
+  data:
+  certs:
