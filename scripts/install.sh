@@ -391,22 +391,25 @@ install_services() {
 fetch_blocklists() {
   step "Fetching blocklists"
 
-  local dest="${DATA_DIR}/blocklists"
-  if curl -fsSL --max-time 120 \
-      "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/domains/light.txt" \
-      -o "${dest}/hagezi-light.txt.tmp"; then
-    local lines
-    lines=$(wc -l < "${dest}/hagezi-light.txt.tmp")
-    if (( lines > 1000 )); then
-      mv "${dest}/hagezi-light.txt.tmp" "${dest}/hagezi-light.txt"
-      chown "$SERVICE_USER":"$SERVICE_USER" "${dest}/hagezi-light.txt"
-      ok "${lines} domains"
-    else
-      rm -f "${dest}/hagezi-light.txt.tmp"
-      warn "the download looked truncated; skipped"
-    fi
+  # Delegate rather than duplicate. This function used to carry its own copy of
+  # a feed URL, and when the URL in fetch-blocklists.sh was corrected this one
+  # was left behind still 404ing -- the same fact written down twice, drifting
+  # apart in exactly the way the config filename did.
+  local fetcher="${PREFIX}/privatedns-fetch-blocklists"
+
+  if [[ ! -x "$fetcher" ]]; then
+    warn "the blocklist fetcher is not installed; the resolver starts without a list"
+    return
+  fi
+
+  if BLOCKLIST_DIR="${DATA_DIR}/blocklists" "$fetcher" >/dev/null 2>&1; then
+    local n
+    n=$(cat "${DATA_DIR}"/blocklists/*.txt 2>/dev/null | wc -l)
+    chown -R "$SERVICE_USER":"$SERVICE_USER" "${DATA_DIR}/blocklists" 2>/dev/null || true
+    ok "${n} domains"
   else
     warn "could not fetch a blocklist; the resolver starts without one"
+    warn "  check them with: ${fetcher} --check"
   fi
 }
 
@@ -539,18 +542,41 @@ EOF
 }
 
 install_cli() {
-  local src
-  for src in private-dns update.sh uninstall.sh backup.sh; do
-    if [[ -f "${SCRIPT_DIR}/${src}" ]]; then
-      install -m 0755 "${SCRIPT_DIR}/${src}" "${PREFIX}/${src%.sh}"
+  step "Installing the management commands"
+
+  # These live in the repository, not in the release archive, so a standalone
+  # install.sh has no local copy to install from.
+  #
+  # Until v1.0.4 this function silently installed nothing in that case -- the
+  # only supported path -- while the closing message told the operator to run
+  # private-dns and privatedns-issue-cert. Neither existed. Fetch them from the
+  # tag being installed, which is immutable, exactly as the unit files above are.
+  local base="https://raw.githubusercontent.com/${REPO}/${RELEASE_TAG}"
+  local src name
+
+  for src in "scripts/private-dns:private-dns" \
+             "scripts/update.sh:update" \
+             "scripts/uninstall.sh:uninstall" \
+             "deploy/scripts/issue-cert.sh:privatedns-issue-cert" \
+             "deploy/scripts/fetch-blocklists.sh:privatedns-fetch-blocklists"; do
+    name="${src##*:}"
+    src="${src%%:*}"
+
+    if [[ -f "${SCRIPT_DIR}/../${src}" ]]; then
+      install -m 0755 "${SCRIPT_DIR}/../${src}" "${PREFIX}/${name}"
+      ok "$name"
+      continue
+    fi
+
+    if curl -fsSL "${base}/${src}" -o "${WORK}/${name}" &&
+       [[ -s "${WORK}/${name}" ]] &&
+       [[ "$(head -1 "${WORK}/${name}")" == "#!"* ]]; then
+      install -m 0755 "${WORK}/${name}" "${PREFIX}/${name}"
+      ok "$name"
+    else
+      warn "could not install ${name}; fetch it from the repository by hand"
     fi
   done
-  if [[ -f "${SCRIPT_DIR}/../deploy/scripts/issue-cert.sh" ]]; then
-    install -m 0755 "${SCRIPT_DIR}/../deploy/scripts/issue-cert.sh" "${PREFIX}/privatedns-issue-cert"
-  fi
-  if [[ -f "${SCRIPT_DIR}/../deploy/scripts/fetch-blocklists.sh" ]]; then
-    install -m 0755 "${SCRIPT_DIR}/../deploy/scripts/fetch-blocklists.sh" "${PREFIX}/privatedns-fetch-blocklists"
-  fi
 }
 
 main() {

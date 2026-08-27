@@ -73,6 +73,35 @@ for script in scripts/install.sh scripts/update.sh scripts/uninstall.sh \
   fi
 done
 [[ $fails -eq 0 ]] && pass "no pipeline can be killed by its own reader"
+
+echo "==> Checking the installer promises only what it installs"
+
+# v1.0.3 told the operator to run private-dns and privatedns-issue-cert in its
+# closing message. install_cli only copied those from a sibling directory, which
+# exists in a git checkout and never in a standalone install -- the only
+# supported path -- so it silently installed nothing and the commands were
+# absent. A command named in the output must be one the installer puts there.
+promised="$(grep -oE '(\$\{PREFIX\}|/usr/local/bin)/[a-z-]+|(^|[^-a-z])private-dns [a-z]' scripts/install.sh \
+            | grep -oE '(private-dns|privatedns-[a-z-]+|update|uninstall)' | sort -u || true)"
+
+for cmd in $promised; do
+  case "$cmd" in
+    privatedns-resolver|privatedns-backend|privatedns-portal|privatedns-admin)
+      continue ;;   # release binaries, installed by install_binaries
+  esac
+  if grep -qE ":${cmd}\"|/${cmd}\"" scripts/install.sh; then
+    pass "installs ${cmd}, which it also tells the operator to run"
+  else
+    report "names ${cmd} but never installs it"
+  fi
+done
+
+# One source of truth for feed URLs.
+if grep -qE 'hagezi|oisd|StevenBlack|dns-blocklists' scripts/install.sh; then
+  report "install.sh hardcodes a blocklist URL; fetch-blocklists.sh owns those"
+else
+  pass "no duplicated blocklist URL in install.sh"
+fi
 echo "==> Checking release tags are validated before use in a URL"
 
 if grep -q 'is not a valid release tag' scripts/install.sh && grep -q 'is not a valid release tag' scripts/update.sh; then

@@ -32,14 +32,35 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; fail_n=$((fail_n + 1)); }
 
 cat > "$STUB/curl" <<'EOF'
 #!/usr/bin/env bash
+# Honour -o, because the installer uses it and a stub that ignores it tests
+# nothing. Everything else on the command line is irrelevant here.
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *)  shift ;;
+  esac
+done
+
+emit() {
+  if [[ -n "${CURL_RAW:-}" ]]; then
+    cat "${CURL_BODY:?}"
+    return
+  fi
+  # Padding on both sides: these bugs only appear when the writer is still
+  # writing after the reader has stopped.
+  for _ in $(seq 1 400); do
+    printf '  "filler": "padding so the pipe buffer cannot swallow the whole body",\n'
+  done
+  cat "${CURL_BODY:?}"
+  for _ in $(seq 1 400); do
+    printf '  "trailer": "more padding after the interesting line",\n'
+  done
+}
+
 [[ -n "${CURL_FAIL:-}" ]] && exit 22
-for _ in $(seq 1 400); do
-  printf '  "filler": "padding so the pipe buffer cannot swallow the whole body",\n'
-done
-cat "${CURL_BODY:?}"
-for _ in $(seq 1 400); do
-  printf '  "trailer": "more padding after the interesting line",\n'
-done
+
+if [[ -n "$out" ]]; then emit > "$out"; else emit; fi
 EOF
 
 cat > "$STUB/ss" <<'EOF'
@@ -69,6 +90,9 @@ chmod +x "$STUB"/chown "$STUB"/chmod
 
 printf '{ "tag_name": "v1.0.1", "name": "release" }\n' > "$FIXTURE/release.json"
 printf '{ "message": "Not Found" }\n'                   > "$FIXTURE/notfound.json"
+printf '#!/usr/bin/env bash
+echo stub
+'                > "$FIXTURE/script.sh"
 
 cat > "$FIXTURE/os-release-debian" <<'EOF'
 PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
@@ -223,6 +247,26 @@ after="$(grep -oE '[0-9a-f]{64}' "$CFGDIR/config.yaml" | head -1)"
   || bad "re-running changed the admin token"
 
 rm -rf "$CFGDIR" "$CFGDIR2" "$DATADIR"
+
+echo "==> install_cli"
+
+# The standalone case: no sibling checkout to copy from. v1.0.3 installed
+# nothing at all here, while its closing message told the operator to run
+# private-dns and privatedns-issue-cert.
+BINDIR="$(mktemp -d)"; WORKDIR="$(mktemp -d)"
+run_case "SCRIPT_DIR='$WORKDIR'; WORK='$WORKDIR'; RELEASE_TAG=v1.0.3; install_cli" \
+  PREFIX="$BINDIR" CURL_BODY="$FIXTURE/script.sh" CURL_RAW=1 >/dev/null 2>&1
+
+missing=""
+for c in private-dns update uninstall privatedns-issue-cert privatedns-fetch-blocklists; do
+  [[ -x "$BINDIR/$c" ]] || missing="$missing $c"
+done
+if [[ -z "$missing" ]]; then
+  ok "installs every management command with no checkout present"
+else
+  bad "not installed:$missing"
+fi
+rm -rf "$BINDIR" "$WORKDIR"
 
 echo "==> next_steps"
 
