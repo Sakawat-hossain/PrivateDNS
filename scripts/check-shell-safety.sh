@@ -51,6 +51,28 @@ done
 
 [[ $fails -eq 0 ]] && pass "no script can have its variables clobbered by /etc/os-release"
 
+
+echo "==> Checking for early-exit readers in pipelines under pipefail"
+
+# grep -q / grep -m / head stop reading as soon as they have what they need.
+# The writer on the left is then killed by SIGPIPE, pipefail promotes 141 to
+# the pipeline's status, and the result is either a fatal error or -- worse --
+# a condition that quietly evaluates to false. Both shipped in v1.0.x.
+for script in scripts/install.sh scripts/update.sh scripts/uninstall.sh \
+              scripts/private-dns deploy/scripts/*.sh; do
+  [[ -f "$script" ]] || continue
+  grep -q 'pipefail' "$script" || continue
+
+  # Strip comments (they discuss the pattern) and neutralise `||`, whose second
+  # bar is not a pipe. What is left is real pipelines only.
+  hits="$(sed -e 's/#.*$//' -e 's/||/__OR__/g' "$script" \
+          | grep -nE '\|[[:space:]]*(grep([[:space:]]+-[A-Za-z]*[qm][A-Za-z]*)+|head([[:space:]]|$))' || true)"
+  if [[ -n "$hits" ]]; then
+    report "$script pipes into an early-exit reader under pipefail"
+    printf '%s\n' "$hits" | sed 's/^/        /' >&2
+  fi
+done
+[[ $fails -eq 0 ]] && pass "no pipeline can be killed by its own reader"
 echo "==> Checking release tags are validated before use in a URL"
 
 if grep -q 'is not a valid release tag' scripts/install.sh && grep -q 'is not a valid release tag' scripts/update.sh; then

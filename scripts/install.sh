@@ -106,7 +106,15 @@ check_ports() {
   local busy=()
   local port
   for port in 53 443 853; do
-    if ss -Hln "sport = :${port}" 2>/dev/null | grep -q .; then
+    # Capture, then test. `ss ... | grep -q .` reads naturally but grep exits at
+    # the first line it sees, ss is left writing to a closed pipe and dies with
+    # SIGPIPE, and pipefail makes the pipeline return 141 -- which `if` reads as
+    # false. So a busy port was silently reported as FREE, the install carried
+    # on, and the resolver then failed to bind. The check existed to catch
+    # exactly the case it got wrong.
+    local listeners
+    listeners="$(ss -Hln "sport = :${port}" 2>/dev/null || true)"
+    if [[ -n "${listeners//[[:space:]]/}" ]]; then
       busy+=("$port")
     fi
   done
@@ -139,10 +147,32 @@ check_ports() {
 # Install
 # ---------------------------------------------------------------------------
 
+# Ask GitHub for the newest published tag.
+#
+# Deliberately not `curl ... | grep -m1 ... | cut`. grep -m1 exits at the first
+# match, curl is left writing to a closed pipe, and dies with
+# "curl: (23) Failure writing output to destination" -- which `set -o pipefail`
+# then turns into a failed pipeline even though the fetch itself worked fine.
+# Fetch into a variable, parse it afterwards, and there is no pipe left for
+# anything to break.
+latest_release_tag() {
+  local json tag
+  json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
+
+  tag="${json#*\"tag_name\"}"
+  [[ "$tag" != "$json" ]] || return 1   # key absent
+  tag="${tag#*:}"
+  tag="${tag#*\"}"
+  tag="${tag%%\"*}"
+
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
+
 resolve_version() {
   if [[ "$RELEASE_TAG" == "latest" ]]; then
-    RELEASE_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+    RELEASE_TAG="$(latest_release_tag)" \
+      || fail "could not determine the latest release"
     [[ -n "$RELEASE_TAG" ]] || fail "could not determine the latest release"
   fi
 
@@ -494,4 +524,9 @@ main() {
   next_steps
 }
 
-main "$@"
+# Run only when executed, not when sourced. Sourcing defines the functions and
+# does nothing else, which is what scripts/test-install.sh needs in order to
+# exercise them against stubbed curl and ss.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

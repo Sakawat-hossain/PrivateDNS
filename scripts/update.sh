@@ -45,9 +45,20 @@ current_version() {
   "${PREFIX}/privatedns-resolver" -version 2>/dev/null || echo "unknown"
 }
 
+# See the note in install.sh: `curl | grep -m1` makes curl exit 23 on a closed
+# pipe, and pipefail turns a successful fetch into a failed one.
 latest_version() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep -m1 '"tag_name"' | cut -d'"' -f4
+  local json tag
+  json="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" || return 1
+
+  tag="${json#*\"tag_name\"}"
+  [[ "$tag" != "$json" ]] || return 1
+  tag="${tag#*:}"
+  tag="${tag#*\"}"
+  tag="${tag%%\"*}"
+
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
 }
 
 detect_arch() {
