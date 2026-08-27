@@ -69,7 +69,7 @@ cmd_status() {
   # Readiness rather than liveness: the interesting question is whether the
   # resolver can actually serve, not whether a process exists.
   local ready
-  ready="$(curl -fsS --max-time 3 http://127.0.0.1:8053/readyz 2>/dev/null || echo '')"
+  ready="$(curl -sS --max-time 3 http://127.0.0.1:8053/ready 2>/dev/null || echo '')"
   if [[ -n "$ready" ]]; then
     if grep -q '"ok":true' <<<"$ready"; then
       printf '  %sready%s\n' "$GREEN" "$OFF"

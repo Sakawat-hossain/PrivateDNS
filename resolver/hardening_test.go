@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -751,5 +753,35 @@ func TestPicksUpACertificateWrittenAfterStartup(t *testing.T) {
 	}
 	if _, err := tlsCfg.GetCertificate(&tls.ClientHelloInfo{}); err != nil {
 		t.Errorf("certificate written after startup was not picked up: %v", err)
+	}
+}
+
+// The scripts asked for /readyz; only /ready was ever registered. curl -f
+// turned the resulting 404 into a connection-style failure, so
+// `private-dns status` reported "the admin endpoint is not answering" about a
+// healthy resolver -- in the same breath as reading its certificate expiry.
+// Both spellings are common, and /healthz already had its alias.
+func TestReadinessAnswersOnBothSpellings(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	cfg := DefaultConfig()
+	cfg.ListenDoT, cfg.ListenDoH = "", ""
+
+	a := NewAdmin(cfg, store, NewBlocklist(t.TempDir()), NewCache(), &Metrics{}).
+		WithHealth(NewHealth(cfg, store, NewBlocklist(t.TempDir()), "test"))
+
+	for _, path := range []string{"/ready", "/readyz", "/health", "/healthz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		a.Routes().ServeHTTP(rec, req)
+
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("%s is not a registered route; a client asking for it cannot tell "+
+				"that apart from the service being down", path)
+		}
 	}
 }

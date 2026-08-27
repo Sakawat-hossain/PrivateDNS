@@ -62,7 +62,13 @@ func (a *Admin) Shutdown() {
 	_ = a.srv.Shutdown(ctx)
 }
 
-func (a *Admin) Serve(addr string) error {
+// Routes builds the admin mux.
+//
+// Separate from Serve so the route table can be asserted in a test. A client
+// asking for a path that was never registered gets a 404, which curl -f
+// reports the same way it reports an unreachable host -- so a missing route
+// reads as a dead service.
+func (a *Admin) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /metrics", a.metrics)
@@ -73,6 +79,7 @@ func (a *Admin) Serve(addr string) error {
 	mux.HandleFunc("GET /health", a.healthz)
 	mux.HandleFunc("GET /healthz", a.healthz) // conventional alias
 	mux.HandleFunc("GET /ready", a.readyz)
+	mux.HandleFunc("GET /readyz", a.readyz) // conventional alias
 	mux.HandleFunc("GET /version", a.versionz)
 
 	mux.HandleFunc("GET /v1/tenants/{id}/usage", a.auth(a.tenantUsage))
@@ -90,9 +97,13 @@ func (a *Admin) Serve(addr string) error {
 	mux.HandleFunc("POST /v1/overrides", a.auth(a.setOverride))
 	mux.HandleFunc("POST /v1/allow", a.auth(a.addAllow))
 
+	return mux
+}
+
+func (a *Admin) Serve(addr string) error {
 	a.srv = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           a.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

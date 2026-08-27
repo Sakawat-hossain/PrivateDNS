@@ -201,6 +201,30 @@ for src in "${ROOT}/deploy/debian/postinst" "${ROOT}/scripts/build-for-vps.sh" \
   done < <(grep -oE '[a-z]+\.example\.(yaml|json)' "$src" | sort -u)
 done
 
+
+printf '\n'
+note "Admin paths the scripts call"
+
+# private-dns and install.sh both asked for /readyz, which was never a route --
+# only /ready was. curl -f turned the 404 into a connection-style failure, so
+# `private-dns status` reported "the admin endpoint is not answering" about a
+# perfectly healthy resolver, while reading its certificate in the next line.
+registered="$(grep -oE 'mux\.HandleFunc\("[A-Z]+ [^"]+"' "${ROOT}/resolver/admin.go" \
+              | sed 's/.*"[A-Z]* //; s/"$//' | sort -u)"
+
+called="$(grep -rhoE '127\.0\.0\.1:8053/[a-z0-9/{}_-]*' \
+            "${ROOT}/scripts/" "${ROOT}/deploy/" 2>/dev/null \
+          | sed 's|.*:8053||' | sort -u)"
+
+for path in $called; do
+  [[ -n "$path" && "$path" != "/" ]] || continue
+  if printf '%s\n' "$registered" | grep -qxF "$path"; then
+    good "${path} is a registered route"
+  else
+    bad "${path} is called but the resolver registers no such route"
+  fi
+done
+
 if [[ $fail -eq 0 ]]; then
   printf '  Release contract holds.\n\n'
 else

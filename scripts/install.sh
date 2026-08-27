@@ -503,7 +503,7 @@ health_check() {
     if curl -fsS --max-time 2 "http://127.0.0.1:8053/healthz" >/dev/null 2>&1; then
       ok "the admin endpoint is answering"
       local ready
-      ready=$(curl -fsS --max-time 3 "http://127.0.0.1:8053/readyz" 2>/dev/null || echo '')
+      ready=$(curl -sS --max-time 3 "http://127.0.0.1:8053/ready" 2>/dev/null || echo '')
       if grep -q '"ok":true' <<<"$ready"; then
         ok "readiness reports healthy"
       else
