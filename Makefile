@@ -68,7 +68,7 @@ vuln: ## Check dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 .PHONY: check
-check: fmt-check vet test scripts-check shell-safety test-install contract-check ## Everything CI runs
+check: fmt-check vet test scripts-check shell-safety test-install contract-check lego-contract ## Everything CI runs
 
 .PHONY: release
 release: ## Cross-compile release binaries into dist/
@@ -127,3 +127,7 @@ shell-safety: ## Catch bugs shellcheck misses (os-release clobbering, unvalidate
 .PHONY: test-install
 test-install: ## Run install.sh's preflight against stubbed curl and ss
 	scripts/test-install.sh
+
+.PHONY: lego-contract
+lego-contract: ## Check issue-cert.sh against a real lego CLI
+	DOWNLOAD_LEGO=1 scripts/check-lego-contract.sh

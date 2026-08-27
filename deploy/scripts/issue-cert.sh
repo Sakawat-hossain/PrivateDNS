@@ -124,16 +124,56 @@ echo "    Let's Encrypt to see it. A minute or two is normal."
 
 mkdir -p "$CERT_DIR" "$LEGO_DIR"
 
+# lego's CLI changed shape in v5.
+#
+# In v4 the ACME flags were global and had to precede the subcommand:
+#
+#     lego --accept-tos --email X --dns cloudflare ... run
+#
+# In v5 they moved onto the `run` subcommand itself, so the v4 form fails with
+# "flag provided but not defined: -accept-tos". The top-level `renew` command
+# was also removed; `run` now decides for itself whether a renewal is due.
+#
+# Probe the binary rather than match on its version string. The question that
+# matters is where THIS lego accepts --accept-tos, and asking it survives
+# upstream reorganising again. Captured, not piped: `lego --help | grep -q`
+# would leave lego writing to a closed pipe and pipefail would call that a
+# failure.
+lego_help_run="$(lego run --help 2>/dev/null || true)"
+lego_help_top="$(lego --help 2>/dev/null || true)"
+
+if [[ "$lego_help_run" == *"--accept-tos"* ]]; then
+  LEGO_STYLE=subcommand
+elif [[ "$lego_help_top" == *"--accept-tos"* ]]; then
+  LEGO_STYLE=global
+else
+  echo "cannot tell how this lego takes --accept-tos; 'lego --version' says:" >&2
+  lego --version >&2 2>/dev/null || echo "  (no version)" >&2
+  exit 1
+fi
+
+ACTION="${1:-run}"
+if [[ "$LEGO_STYLE" == "subcommand" && "$ACTION" == "renew" ]]; then
+  # v5 folded renewal into run; there is no `renew` command to call.
+  ACTION=run
+fi
+
+lego_args=(
+  --accept-tos
+  --email "$EMAIL"
+  --dns cloudflare
+  --path "$LEGO_DIR"
+  --domains "$BASE_DOMAIN"
+  --domains "*.$BASE_DOMAIN"
+)
+
 # Both names are needed: the bare hostname for the setup guides and diagnostics,
 # and the wildcard for every per-tenant hostname.
-lego \
-  --accept-tos \
-  --email "$EMAIL" \
-  --dns cloudflare \
-  --path "$LEGO_DIR" \
-  --domains "$BASE_DOMAIN" \
-  --domains "*.$BASE_DOMAIN" \
-  "${1:-run}"
+if [[ "$LEGO_STYLE" == "subcommand" ]]; then
+  lego "$ACTION" "${lego_args[@]}"
+else
+  lego "${lego_args[@]}" "$ACTION"
+fi
 
 install -m 0644 "$LEGO_DIR/certificates/$BASE_DOMAIN.crt" "$CERT_DIR/fullchain.pem"
 install -m 0640 -g privatedns "$LEGO_DIR/certificates/$BASE_DOMAIN.key" "$CERT_DIR/privkey.pem"
