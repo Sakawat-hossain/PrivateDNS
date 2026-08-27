@@ -27,6 +27,8 @@ func main() {
 		configPath  = flag.String("config", "/etc/private-dns/config.json", "path to the configuration file")
 		writeSample = flag.Bool("init", false, "write a starter configuration file and exit")
 		showVersion = flag.Bool("version", false, "print the version and exit")
+		backupTo    = flag.String("backup", "", "write a consistent snapshot of the policy database to this path and exit")
+		verifyPath  = flag.String("verify-backup", "", "check that a backup file is a usable database and exit")
 	)
 	flag.Parse()
 
@@ -43,9 +45,32 @@ func main() {
 		return
 	}
 
+	if *verifyPath != "" {
+		schema, tenants, err := resolver.VerifyBackup(*verifyPath)
+		if err != nil {
+			log.Fatalf("backup is not usable: %v", err)
+		}
+		fmt.Printf("backup ok: schema version %d, %d tenants\n", schema, tenants)
+		return
+	}
+
 	cfg, err := resolver.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if *backupTo != "" {
+		if err := resolver.Backup(cfg.DBPath, *backupTo); err != nil {
+			log.Fatalf("backup failed: %v", err)
+		}
+		schema, tenants, err := resolver.VerifyBackup(*backupTo)
+		if err != nil {
+			// Taking a backup and not checking it leaves an assumption, and
+			// the moment it matters is the worst time to test it.
+			log.Fatalf("backup written but unreadable: %v", err)
+		}
+		fmt.Printf("backup written to %s (schema %d, %d tenants)\n", *backupTo, schema, tenants)
+		return
 	}
 
 	srv, err := resolver.New(cfg)
