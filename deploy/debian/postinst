@@ -1,0 +1,56 @@
+#!/bin/sh
+# Debian post-installation.
+#
+# Runs on both install and upgrade, so everything here is idempotent and
+# nothing overwrites an existing configuration.
+set -e
+
+CONFIG_DIR=/etc/private-dns
+DATA_DIR=/var/lib/private-dns
+USER=privatedns
+
+case "$1" in
+  configure)
+    if ! getent passwd "$USER" >/dev/null; then
+      adduser --system --no-create-home --group \
+              --home "$DATA_DIR" --shell /usr/sbin/nologin "$USER"
+    fi
+
+    install -d -m 0755 "$CONFIG_DIR"
+    install -d -m 0750 -o "$USER" -g "$USER" "$CONFIG_DIR/certs"
+    install -d -m 0750 -o "$USER" -g "$USER" "$DATA_DIR"
+    install -d -m 0750 -o "$USER" -g "$USER" "$DATA_DIR/blocklists"
+    install -d -m 0700 -o "$USER" -g "$USER" "$DATA_DIR/backups"
+
+    # Only on a first install. An upgrade must never reset a token that other
+    # systems are already using, or a domain someone configured.
+    if [ ! -f "$CONFIG_DIR/config.json" ]; then
+      TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+      sed -e "s|GENERATE_WITH_openssl_rand_hex_32|$TOKEN|" \
+          "$CONFIG_DIR/config.example.json" > "$CONFIG_DIR/config.json"
+      chmod 0640 "$CONFIG_DIR/config.json"
+      chown root:"$USER" "$CONFIG_DIR/config.json"
+
+      echo ""
+      echo "PrivateDNS installed. Before it can serve customers:"
+      echo "  1. Set base_domain in $CONFIG_DIR/config.json"
+      echo "  2. Point dns and *.dns at this host (DNS-only, not proxied)"
+      echo "  3. Issue a wildcard certificate: privatedns-issue-cert run"
+      echo ""
+      echo "Then: systemctl enable --now privatedns-resolver"
+      echo ""
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    # Restart what was already running; do not start anything new. A package
+    # upgrade should not enable services the operator chose to leave off.
+    for c in resolver backend portal admin; do
+      if systemctl is-active --quiet "privatedns-$c" 2>/dev/null; then
+        systemctl restart "privatedns-$c" || true
+      fi
+    done
+    ;;
+esac
+
+exit 0

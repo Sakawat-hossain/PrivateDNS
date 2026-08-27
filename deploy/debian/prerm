@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  remove|deconfigure)
+    for c in resolver backend portal admin; do
+      systemctl stop "privatedns-$c" >/dev/null 2>&1 || true
+      systemctl disable "privatedns-$c" >/dev/null 2>&1 || true
+    done
+    ;;
+esac
+
+exit 0

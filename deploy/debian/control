@@ -1,0 +1,17 @@
+Package: privatedns
+Version: VERSION_PLACEHOLDER
+Section: net
+Priority: optional
+Architecture: ARCH_PLACEHOLDER
+Maintainer: Sakawat Hossain <143103281+Sakawat-hossain@users.noreply.github.com>
+Depends: adduser, systemd
+Recommends: unbound, nginx
+Homepage: https://github.com/Sakawat-hossain/PrivateDNS
+Description: Multi-tenant filtering DNS platform
+ PrivateDNS serves DNS-over-TLS, DNS-over-HTTPS and plain DNS, identifying
+ each tenant from the TLS SNI and applying that tenant's own policy before
+ answering.
+ .
+ Includes the resolver, an administration API, a customer portal and an
+ operator dashboard. Storage is embedded SQLite; the binaries are static and
+ have no runtime dependencies.

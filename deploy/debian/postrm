@@ -1,0 +1,29 @@
+#!/bin/sh
+# Debian post-removal.
+#
+# `remove` keeps the database. `purge` deletes it, which is what purge means in
+# Debian and is why it is a separate action rather than the default.
+set -e
+
+CONFIG_DIR=/etc/private-dns
+DATA_DIR=/var/lib/private-dns
+USER=privatedns
+
+case "$1" in
+  remove)
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    echo "PrivateDNS removed. Configuration and customer data were kept:"
+    echo "  $CONFIG_DIR"
+    echo "  $DATA_DIR"
+    echo "Use 'apt purge privatedns' to delete them."
+    ;;
+  purge)
+    rm -rf "$CONFIG_DIR" "$DATA_DIR"
+    if getent passwd "$USER" >/dev/null; then
+      deluser --system "$USER" >/dev/null 2>&1 || true
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0
