@@ -35,6 +35,7 @@ type Resolver struct {
 	limiter *RateLimiter
 	usage   *UsageCollector
 	probes  *ProbeRecorder
+	binder  *ipBinder
 	rebind  rebindPolicy
 	log     *slog.Logger
 
@@ -44,7 +45,7 @@ type Resolver struct {
 }
 
 func NewResolver(cfg Config, store Store, block *Blocklist, cache *Cache, m *Metrics) *Resolver {
-	return &Resolver{
+	r := &Resolver{
 		cfg:       cfg,
 		store:     store,
 		block:     block,
@@ -55,6 +56,13 @@ func NewResolver(cfg Config, store Store, block *Blocklist, cache *Cache, m *Met
 		udpClient: &dns.Client{Net: "udp", Timeout: 4 * time.Second, UDPSize: maxUDPSize},
 		tcpClient: &dns.Client{Net: "tcp", Timeout: 6 * time.Second},
 	}
+
+	// Only where a proxy tier needs it. This writes customer addresses to the
+	// database, and a deployment without a proxy has no reason to store them.
+	if cfg.BindClientIP {
+		r.binder = newIPBinder(store, slog.Default())
+	}
+	return r
 }
 
 // WithRateLimiter attaches a limiter. A nil limiter disables rate limiting.
@@ -84,13 +92,24 @@ type identity struct {
 	routeID string // set when identified from the TLS SNI
 	ip      string // set when identified from the source address
 	via     string // "sni" or "ip"
+	srcIP   string // the address the query arrived from, on every path
 }
 
 func (r *Resolver) tenantFor(id identity) *Tenant {
 	if id.via == "ip" {
 		return r.store.TenantByIP(id.ip)
 	}
-	return r.store.Tenant(id.routeID)
+
+	t := r.store.Tenant(id.routeID)
+
+	// Record where this tenant is querying from, so the proxy tier recognises
+	// the same customer when their app connects to it. Only for a tenant that
+	// exists and is currently active: an unknown or expired route must never
+	// get its source address authorised at the proxy.
+	if t != nil && r.binder != nil && t.Active(time.Now().Unix()) {
+		r.binder.observe(t.RouteID, id.srcIP)
+	}
+	return t
 }
 
 // Resolve runs one query through the policy pipeline and returns the reply.

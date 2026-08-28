@@ -850,3 +850,111 @@ func TestOpenStoreReadOnlyRejectsAnEmptyDatabase(t *testing.T) {
 		t.Fatal("an empty file was accepted as a policy database")
 	}
 }
+
+// A customer's address has to be registered before the SNI proxy will carry
+// their traffic. Registering it by hand does not survive contact with mobile
+// networks, which hand out a new address several times a day -- so the service
+// records the address each tenant queries from, which is the one moment both
+// facts are visible together.
+func TestQueryBindsTheClientAddress(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "bind.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateTenant("abc123", "phone", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.BindClientIP = true
+	r := NewResolver(cfg, store, NewBlocklist(t.TempDir()), NewCache(), &Metrics{})
+
+	if store.TenantByIP("203.0.113.9") != nil {
+		t.Fatal("address is bound before any query")
+	}
+
+	r.tenantFor(identity{routeID: "abc123", via: "sni", srcIP: "203.0.113.9"})
+
+	// The write is off the query path, so it is not visible immediately.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := store.Reload(); err != nil {
+			t.Fatal(err)
+		}
+		if store.TenantByIP("203.0.113.9") != nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("querying did not bind the client address; the proxy would refuse this customer")
+}
+
+// An expired or unknown route must not get its address authorised at the proxy.
+// Binding is what lets traffic through the paid tier, so it follows the same
+// rule as everything else: only for a tenant who is currently active.
+func TestQueryDoesNotBindForAnInactiveTenant(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "bind2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// Expired an hour ago.
+	if err := store.CreateTenant("old999", "lapsed", time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.BindClientIP = true
+	r := NewResolver(cfg, store, NewBlocklist(t.TempDir()), NewCache(), &Metrics{})
+
+	r.tenantFor(identity{routeID: "old999", via: "sni", srcIP: "203.0.113.77"})
+
+	time.Sleep(500 * time.Millisecond)
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if store.TenantByIP("203.0.113.77") != nil {
+		t.Error("an expired tenant's address was authorised at the proxy")
+	}
+}
+
+// Off by default: a deployment with no proxy tier has no reason to store
+// customer addresses.
+func TestBindingIsOffUnlessEnabled(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "bind3.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateTenant("xyz777", "phone", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := DefaultConfig() // BindClientIP not set
+	r := NewResolver(cfg, store, NewBlocklist(t.TempDir()), NewCache(), &Metrics{})
+	r.tenantFor(identity{routeID: "xyz777", via: "sni", srcIP: "203.0.113.5"})
+
+	time.Sleep(500 * time.Millisecond)
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if store.TenantByIP("203.0.113.5") != nil {
+		t.Error("addresses were recorded with binding disabled")
+	}
+}

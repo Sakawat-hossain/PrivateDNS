@@ -46,6 +46,19 @@ type Config struct {
 	// OpenPlain allows unauthenticated queries on the plain :53 listener.
 	// Leave false. An open resolver is a DNS amplification vector and will
 	// get the host onto abuse lists.
+	// BindClientIP records the address each tenant queries from, so the SNI
+	// proxy recognises the same customer when their app connects to it.
+	//
+	// Without it every customer address must be registered by hand and
+	// re-registered whenever their network changes it -- several times a day
+	// on mobile. The DNS query is the one moment both the tenant and their
+	// address are visible together.
+	//
+	// Only meaningful with a proxy tier. Off by default: it writes customer
+	// addresses to the database, which a deployment without a proxy has no
+	// reason to store.
+	BindClientIP bool `yaml:"bind_client_ip" json:"bind_client_ip"`
+
 	OpenPlain bool `yaml:"open_plain" json:"open_plain"`
 
 	// RateLimitQPS caps sustained queries per second for a single tenant.

@@ -155,7 +155,8 @@ func (l *Listeners) handleDoT(conn net.Conn) {
 	}
 	defer release()
 
-	l.serveStream(tc, identity{routeID: routeID, via: "sni"})
+	src, _, _ := net.SplitHostPort(tc.RemoteAddr().String())
+	l.serveStream(tc, identity{routeID: routeID, via: "sni", srcIP: src})
 }
 
 // serveStream handles length-prefixed DNS messages, the framing used by both
@@ -211,7 +212,7 @@ func (l *Listeners) ServePlain(addr string) error {
 			return
 		}
 
-		reply := l.res.Resolve(req, identity{ip: host, via: "ip"})
+		reply := l.res.Resolve(req, identity{ip: host, via: "ip", srcIP: host})
 
 		// Truncate to what this client said it can accept, so an oversized
 		// answer triggers a TCP retry instead of being silently dropped by a
@@ -312,7 +313,8 @@ func (l *Listeners) dohHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply := l.res.Resolve(req, identity{routeID: routeID, via: "sni"})
+	src, _, _ := net.SplitHostPort(r.RemoteAddr)
+	reply := l.res.Resolve(req, identity{routeID: routeID, via: "sni", srcIP: src})
 	out, err := reply.Pack()
 	if err != nil {
 		http.Error(w, "pack failure", http.StatusInternalServerError)
