@@ -785,3 +785,68 @@ func TestReadinessAnswersOnBothSpellings(t *testing.T) {
 		}
 	}
 }
+
+// The SNI proxy shares this database but owns none of it, and its unit mounts
+// the directory read-only. OpenStore runs migrations -- which write -- so the
+// proxy crash-looped on startup with "attempt to write a readonly database"
+// against a schema that was already correct.
+func TestOpenStoreReadOnlyDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.db")
+
+	// The resolver creates and owns the schema.
+	w, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	if err := w.CreateTenant("abc123", "test", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := OpenStoreReadOnly(path)
+	if err != nil {
+		t.Fatalf("OpenStoreReadOnly on a valid database: %v", err)
+	}
+	defer r.Close()
+
+	if r.Tenant("abc123") == nil {
+		t.Error("read-only store cannot see a tenant the resolver wrote")
+	}
+
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() {
+		t.Error("opening read-only modified the database file")
+	}
+
+	// The guarantee that matters: SQLite itself refuses the write, so a
+	// future change that starts writing here fails loudly rather than
+	// silently diverging from the resolver's copy.
+	if err := r.CreateTenant("xyz789", "should not work", time.Now().Add(time.Hour).Unix()); err == nil {
+		t.Error("a write through the read-only store succeeded")
+	}
+}
+
+// A database that was never initialised must be named as such, not reported as
+// some incidental SQL error.
+func TestOpenStoreReadOnlyRejectsAnEmptyDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := OpenStoreReadOnly(path)
+	if err == nil {
+		s.Close()
+		t.Fatal("an empty file was accepted as a policy database")
+	}
+}

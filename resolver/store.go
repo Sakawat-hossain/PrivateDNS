@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -481,4 +482,46 @@ func (s *SQLiteStore) ListOverrides() ([]OverrideRow, error) {
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// OpenStoreReadOnly opens the policy database without writing to it.
+//
+// The SNI proxy shares the resolver's database as one source of truth about
+// who has paid, but it owns none of it: the resolver writes the schema and the
+// rows, the proxy only asks which tenant a source address belongs to. Its
+// systemd unit mounts /var/lib/private-dns read-only to enforce that.
+//
+// OpenStore cannot be used there. It runs migrations, which write, so the proxy
+// died on startup with "attempt to write a readonly database" -- a schema
+// migration attempted by a process that is not allowed to have one, against a
+// database whose schema was already correct.
+//
+// mode=ro makes SQLite itself refuse writes, so a future change that starts
+// writing here fails at the query rather than silently diverging from the
+// resolver's copy.
+func OpenStoreReadOnly(path string) (*SQLiteStore, error) {
+	dsn := "file:" + filepath.ToSlash(path) + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open db read-only: %w", err)
+	}
+
+	// No migrate() here. The schema belongs to the resolver; check it is a
+	// version this build understands rather than trying to change it.
+	v, err := currentSchemaVersion(db)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read schema version (is this the resolver's policy.db?): %w", err)
+	}
+	if v == 0 {
+		db.Close()
+		return nil, fmt.Errorf("policy database at %s has no schema; copy it from the resolver", path)
+	}
+
+	s := &SQLiteStore{db: db}
+	if err := s.Reload(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
 }
